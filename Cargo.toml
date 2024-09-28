@@ -114,6 +114,9 @@ walkdir = "2.5.0"
 windows-sys = "0.59"
 fetch = { version = "0.1.0", path = "crates/fetch" }
 
+[patch.crates-io]
+libz-sys = { git = "https://github.com/oligamiq/libz-sys", default-features = false }
+
 [workspace.lints.rust]
 rust_2018_idioms = "warn" # TODO: could this be removed?
 

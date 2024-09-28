@@ -736,7 +736,7 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
         assert!(self.pending_ids.insert(id));
 
         #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
-        {
+        let mut handle = {
             let (mut handle, _timeout) = http_handle_and_timeout(self.set.gctx)?;
             handle.get(true)?;
             handle.url(&url)?;
@@ -784,7 +784,9 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
                     None => false,
                 })
             })?;
-        }
+
+            handle
+        };
 
         #[cfg(all(target_os = "wasi", target_env = "p1"))]
         {

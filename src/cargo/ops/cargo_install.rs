@@ -109,7 +109,7 @@ impl<'gctx> InstallablePackage<'gctx> {
                 let mut source = GitSource::new(source_id, gctx)?;
                 select_pkg(
                     &mut source,
-                    dep,
+                    dep.clone(),
                     |git: &mut GitSource<'_>| git.read_packages(),
                     gctx,
                     current_rust_version,
