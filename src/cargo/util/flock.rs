@@ -435,28 +435,30 @@ mod sys {
     use std::fs::File;
     use std::io::{Error, Result};
 
+    const ENOSYS: i32 = 38;
+
     pub(super) fn lock_shared(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        Err(Error::from_raw_os_error(ENOSYS))
     }
 
     pub(super) fn lock_exclusive(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        Err(Error::from_raw_os_error(ENOSYS))
     }
 
     pub(super) fn try_lock_shared(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        Err(Error::from_raw_os_error(ENOSYS))
     }
 
     pub(super) fn try_lock_exclusive(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        Err(Error::from_raw_os_error(ENOSYS))
     }
 
     pub(super) fn unlock(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        Err(Error::from_raw_os_error(ENOSYS))
     }
 
     pub(super) fn error_contended(err: &Error) -> bool {
-        err.raw_os_error().map_or(false, |x| x == libc::EWOULDBLOCK)
+        false
     }
 
     pub(super) fn error_unsupported(err: &Error) -> bool {
