@@ -710,6 +710,7 @@ fn register_previous_locks(
 fn master_branch_git_source(id: PackageId, resolve: &Resolve) -> Option<PackageId> {
     if resolve.version() <= ResolveVersion::V2 {
         let source = id.source_id();
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         if let Some(GitReference::DefaultBranch) = source.git_reference() {
             let new_source =
                 SourceId::for_git(source.url(), GitReference::Branch("master".to_string()))

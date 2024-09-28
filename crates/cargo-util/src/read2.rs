@@ -1,6 +1,23 @@
 pub use self::imp::read2;
 
-#[cfg(unix)]
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+mod imp {
+    use std::io;
+    use std::process::{ChildStderr, ChildStdout};
+
+    pub fn read2(
+        _out_pipe: ChildStdout,
+        _err_pipe: ChildStderr,
+        _data: &mut dyn FnMut(bool, &mut Vec<u8>, bool),
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "reading from child processes is not supported on this platform",
+        ))
+    }
+}
+
+#[cfg(all(unix, not(target_os = "wasi")))]
 mod imp {
     use libc::{c_int, fcntl, F_GETFL, F_SETFL, O_NONBLOCK};
     use std::io;

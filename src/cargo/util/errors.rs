@@ -1,4 +1,5 @@
 use anyhow::Error;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::Easy;
 use std::fmt::{self, Write};
 use std::path::PathBuf;
@@ -37,6 +38,7 @@ pub struct HttpNotSuccessful {
 }
 
 impl HttpNotSuccessful {
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn new_from_handle(
         handle: &mut Easy,
         initial_url: &str,

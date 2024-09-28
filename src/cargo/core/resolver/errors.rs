@@ -406,6 +406,7 @@ pub(crate) fn describe_path<'a>(
         let mut dep_path_desc = format!("package `{}`", p.0);
         for (pkg, dep) in path {
             let dep = dep.unwrap();
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             let source_kind = if dep.source_id().is_path() {
                 "path "
             } else if dep.source_id().is_git() {
@@ -413,6 +414,14 @@ pub(crate) fn describe_path<'a>(
             } else {
                 ""
             };
+
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            let source_kind = if dep.source_id().is_path() {
+                "path "
+            } else {
+                ""
+            };
+
             let requirement = if source_kind.is_empty() {
                 format!("{} = \"{}\"", dep.name_in_toml(), dep.version_req())
             } else {

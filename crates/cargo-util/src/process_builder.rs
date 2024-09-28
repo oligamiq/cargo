@@ -8,6 +8,7 @@ use tempfile::NamedTempFile;
 
 use std::collections::BTreeMap;
 use std::env;
+use std::f32::consts::E;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
@@ -217,7 +218,10 @@ impl ProcessBuilder {
     }
 
     fn should_retry_with_argfile(&self, err: &io::Error) -> bool {
-        self.retry_with_argfile && imp::command_line_too_big(err)
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        return self.retry_with_argfile && imp::command_line_too_big(err);
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        return false;
     }
 
     /// Like [`Command::status`] but with a better error message.
@@ -272,7 +276,14 @@ impl ProcessBuilder {
     /// pretty quickly, and if the child handles the signal then we won't terminate
     /// (and we shouldn't!) until the process itself later exits.
     pub fn exec_replace(&self) -> Result<()> {
-        imp::exec_replace(self)
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        return imp::exec_replace(self);
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        return Err(ProcessError::new(
+            "exec_replace is not supported on this platform",
+            None,
+            None,
+        ).into());
     }
 
     /// Like [`Command::output`] but with a better error message.
@@ -664,6 +675,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     fn argfile_build_fails_if_arg_contains_invalid_utf8() {
         let mut cmd = ProcessBuilder::new("echo");
 

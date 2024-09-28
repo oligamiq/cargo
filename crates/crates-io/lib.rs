@@ -4,6 +4,7 @@ use std::io::prelude::*;
 use std::io::{Cursor, SeekFrom};
 use std::time::Instant;
 
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::{Easy, List};
 use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,8 @@ pub struct Registry {
     /// Optional authorization token.
     /// If None, commands requiring authorization will fail.
     token: Option<String>,
+
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     /// Curl handle for issuing requests.
     handle: Easy,
     /// Whether to include the authorization token with all requests.
@@ -141,8 +144,13 @@ struct Crates {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Error from libcurl.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     #[error(transparent)]
     Curl(#[from] curl::Error),
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    #[error(transparent)]
+    Fetch(#[from] fetch::Error),
 
     /// Error from seriailzing the request payload and deserializing the
     /// response body (like response body didn't match expected structure).
@@ -163,22 +171,14 @@ pub enum Error {
         status(*code),
         errors.join(", "),
     )]
-    Api {
-        code: u32,
-        headers: Vec<String>,
-        errors: Vec<String>,
-    },
+    Api { code: u32, headers: Vec<String>, errors: Vec<String> },
 
     /// Error from API response which didn't have pre-programmed `errors.details`.
     #[error(
         "failed to get a 200 OK response, got {code}\nheaders:\n\t{}\nbody:\n{body}",
         headers.join("\n\t"),
     )]
-    Code {
-        code: u32,
-        headers: Vec<String>,
-        body: String,
-    },
+    Code { code: u32, headers: Vec<String>, body: String },
 
     /// Reason why the token was invalid.
     #[error("{0}")]
@@ -212,12 +212,14 @@ impl Registry {
     pub fn new_handle(
         host: String,
         token: Option<String>,
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         handle: Easy,
         auth_required: bool,
     ) -> Registry {
         Registry {
             host,
             token,
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             handle,
             auth_required,
         }
@@ -290,32 +292,47 @@ impl Registry {
 
         let url = format!("{}/api/v1/crates/new", self.host);
 
-        self.handle.put(true)?;
-        self.handle.url(&url)?;
-        self.handle.in_filesize(size as u64)?;
-        let mut headers = List::new();
-        headers.append("Accept: application/json")?;
-        headers.append(&format!("Authorization: {}", self.token()?))?;
-        self.handle.http_headers(headers)?;
+        let response: serde_json::Value;
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            self.handle.put(true)?;
+            self.handle.url(&url)?;
+            self.handle.in_filesize(size as u64)?;
+            let mut headers = List::new();
+            headers.append("Accept: application/json")?;
+            headers.append(&format!("Authorization: {}", self.token()?))?;
+            self.handle.http_headers(headers)?;
+            let started = Instant::now();
+            let body =
+                self.handle(&mut |buf| body.read(buf).unwrap_or(0)).map_err(|e| match e {
+                    Error::Code { code, .. }
+                        if code == 503
+                            && started.elapsed().as_secs() >= 29
+                            && self.host_is_crates_io() =>
+                    {
+                        Error::Timeout(tarball_len)
+                    }
+                    _ => e.into(),
+                })?;
+            response = if body.is_empty() { "{}".parse()? } else { body.parse::<serde_json::Value>()? };
+        };
 
-        let started = Instant::now();
-        let body = self
-            .handle(&mut |buf| body.read(buf).unwrap_or(0))
-            .map_err(|e| match e {
-                Error::Code { code, .. }
-                    if code == 503
-                        && started.elapsed().as_secs() >= 29
-                        && self.host_is_crates_io() =>
-                {
-                    Error::Timeout(tarball_len)
-                }
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            let headers = vec![
+                ("Accept".to_string(), "application/json".to_string()),
+                ("Authorization".to_string(), format!("Authorization: {}", self.token()?)),
+            ];
+            let mut buf = Vec::new();
+            body.read_to_end(&mut buf)?;
+            let body = fetch::fetch(url, "PUT", headers, buf).map_err(|e| match e {
+                fetch::Error::Fetch(code) if code == 503 && self.host_is_crates_io() => Error::Timeout(tarball_len),
+                fetch::Error::Timeout => Error::Timeout(tarball_len),
                 _ => e.into(),
             })?;
-
-        let response = if body.is_empty() {
-            "{}".parse()?
-        } else {
-            body.parse::<serde_json::Value>()?
+            let body = body.body;
+            let body = String::from_utf8(body)?;
+            response = if body.is_empty() { "{}".parse()? } else { body.parse::<serde_json::Value>()? };
         };
 
         let invalid_categories: Vec<String> = response
@@ -339,11 +356,7 @@ impl Registry {
             .map(|x| x.iter().flat_map(|j| j.as_str()).map(Into::into).collect())
             .unwrap_or_else(Vec::new);
 
-        Ok(Warnings {
-            invalid_categories,
-            invalid_badges,
-            other,
-        })
+        Ok(Warnings { invalid_categories, invalid_badges, other })
     }
 
     pub fn search(&mut self, query: &str, limit: u32) -> Result<(Vec<Crate>, u32)> {
@@ -371,43 +384,62 @@ impl Registry {
     }
 
     fn put(&mut self, path: &str, b: &[u8]) -> Result<String> {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         self.handle.put(true)?;
         self.req(path, Some(b), Auth::Authorized)
     }
 
     fn get(&mut self, path: &str) -> Result<String> {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         self.handle.get(true)?;
         self.req(path, None, Auth::Authorized)
     }
 
     fn delete(&mut self, path: &str, b: Option<&[u8]>) -> Result<String> {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         self.handle.custom_request("DELETE")?;
         self.req(path, b, Auth::Authorized)
     }
 
     fn req(&mut self, path: &str, body: Option<&[u8]>, authorized: Auth) -> Result<String> {
-        self.handle.url(&format!("{}/api/v1{}", self.host, path))?;
-        let mut headers = List::new();
-        headers.append("Accept: application/json")?;
-        if body.is_some() {
-            headers.append("Content-Type: application/json")?;
-        }
-
-        if self.auth_required || authorized == Auth::Authorized {
-            headers.append(&format!("Authorization: {}", self.token()?))?;
-        }
-        self.handle.http_headers(headers)?;
-        match body {
-            Some(mut body) => {
-                self.handle.upload(true)?;
-                self.handle.in_filesize(body.len() as u64)?;
-                self.handle(&mut |buf| body.read(buf).unwrap_or(0))
-                    .map_err(|e| e.into())
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            self.handle.url(&format!("{}/api/v1{}", self.host, path))?;
+            let mut headers = List::new();
+            headers.append("Accept: application/json")?;
+            if body.is_some() {
+                headers.append("Content-Type: application/json")?;
             }
-            None => self.handle(&mut |_| 0).map_err(|e| e.into()),
+
+            if self.auth_required || authorized == Auth::Authorized {
+                headers.append(&format!("Authorization: {}", self.token()?))?;
+            }
+            self.handle.http_headers(headers)?;
+            match body {
+                Some(mut body) => {
+                    self.handle.upload(true)?;
+                    self.handle.in_filesize(body.len() as u64)?;
+                    self.handle(&mut |buf| body.read(buf).unwrap_or(0)).map_err(|e| e.into())
+                }
+                None => self.handle(&mut |_| 0).map_err(|e| e.into()),
+            }
+        }
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            let mut headers = vec![
+                ("Accept".to_string(), "application/json".to_string()),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ];
+            if self.auth_required || authorized == Auth::Authorized {
+                headers.push(("Authorization".to_string(), format!("Authorization: {}", self.token()?)));
+            }
+            let body = body.unwrap_or(&[]);
+            fetch::fetch(format!("{}/api/v1{}", self.host, path), "GET", headers, body.to_vec())
+                .map_err(|e| e.into()).map(|body| String::from_utf8(body.body).unwrap())
         }
     }
 
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     fn handle(&mut self, read: &mut dyn FnMut(&mut [u8]) -> usize) -> Result<String> {
         let mut headers = Vec::new();
         let mut body = Vec::new();
@@ -440,16 +472,8 @@ impl Registry {
         match (self.handle.response_code()?, errors) {
             (0, None) => Ok(body),
             (code, None) if is_success(code) => Ok(body),
-            (code, Some(errors)) => Err(Error::Api {
-                code,
-                headers,
-                errors,
-            }),
-            (code, None) => Err(Error::Code {
-                code,
-                headers,
-                body,
-            }),
+            (code, Some(errors)) => Err(Error::Api { code, headers, errors }),
+            (code, None) => Err(Error::Code { code, headers, body }),
         }
     }
 }
@@ -518,9 +542,7 @@ fn reason(code: u32) -> &'static str {
 
 /// Returns `true` if the host of the given URL is "crates.io".
 pub fn is_url_crates_io(url: &str) -> bool {
-    Url::parse(url)
-        .map(|u| u.host_str() == Some("crates.io"))
-        .unwrap_or(false)
+    Url::parse(url).map(|u| u.host_str() == Some("crates.io")).unwrap_or(false)
 }
 
 /// Checks if a token is valid or malformed.

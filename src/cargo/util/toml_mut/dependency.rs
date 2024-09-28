@@ -1,5 +1,6 @@
 //! Information about dependencies in a manifest.
 
+use std::any;
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -705,6 +706,7 @@ impl std::fmt::Display for Dependency {
 
 impl<'s> From<&'s Summary> for Dependency {
     fn from(other: &'s Summary) -> Self {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         let source: Source = if let Some(path) = other.source_id().local_path() {
             PathSource::new(path)
                 .set_version(other.version().to_string())
@@ -722,6 +724,16 @@ impl<'s> From<&'s Summary> for Dependency {
         } else {
             RegistrySource::new(other.version().to_string()).into()
         };
+
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        let source: Source = if let Some(path) = other.source_id().local_path() {
+            PathSource::new(path)
+                .set_version(other.version().to_string())
+                .into()
+        } else {
+            RegistrySource::new(other.version().to_string()).into()
+        };
+
         Dependency::new(other.name().as_str()).set_source(source)
     }
 }
@@ -972,7 +984,11 @@ impl GitSource {
     pub fn source_id(&self) -> CargoResult<SourceId> {
         let git_url = self.git.parse::<url::Url>()?;
         let git_ref = self.git_ref();
-        SourceId::for_git(&git_url, git_ref)
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        return SourceId::for_git(&git_url, git_ref);
+
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        anyhow::bail!("git dependencies are not supported on this platform")
     }
 
     fn git_ref(&self) -> GitReference {

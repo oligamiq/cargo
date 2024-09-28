@@ -42,6 +42,7 @@ pub fn exec(gctx: &mut GlobalContext, args: &ArgMatches) -> CliResult {
                     )?;
                 }
                 None => {
+                    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
                     crate::execute_external_subcommand(
                         gctx,
                         subcommand,

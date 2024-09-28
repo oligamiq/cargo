@@ -2188,8 +2188,17 @@ fn to_dependency_source_id<P: ResolveToPath + Clone>(
                 );
                 manifest_ctx.warnings.push(msg);
             }
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+            {
+                SourceId::for_git(&loc, reference)
+            }
 
-            SourceId::for_git(&loc, reference)
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            {
+                bail!(
+                    "git dependencies are not supported on the `wasi` target environment"
+                );
+            }
         }
         (None, Some(path), _, _) => {
             let path = path.resolve(manifest_ctx.gctx);

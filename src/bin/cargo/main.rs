@@ -2,7 +2,9 @@
 
 use cargo::core::features;
 use cargo::core::shell::Shell;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use cargo::util::network::http::http_handle;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use cargo::util::network::http::needs_custom_http_transport;
 use cargo::util::{self, closest_msg, command_prelude, CargoResult};
 use cargo_util::{ProcessBuilder, ProcessError};
@@ -187,6 +189,7 @@ fn list_commands(gctx: &GlobalContext) -> BTreeMap<String, CommandInfo> {
             else {
                 continue;
             };
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             if is_executable(entry.path()) {
                 commands.insert(
                     name.to_string(),
@@ -239,6 +242,7 @@ fn list_commands(gctx: &GlobalContext) -> BTreeMap<String, CommandInfo> {
     commands
 }
 
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn find_external_subcommand(gctx: &GlobalContext, cmd: &str) -> Option<PathBuf> {
     let command_exe = format!("cargo-{}{}", cmd, env::consts::EXE_SUFFIX);
     search_directories(gctx)
@@ -247,6 +251,7 @@ fn find_external_subcommand(gctx: &GlobalContext, cmd: &str) -> Option<PathBuf> 
         .find(|file| is_executable(file))
 }
 
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn execute_external_subcommand(gctx: &GlobalContext, cmd: &str, args: &[&OsStr]) -> CliResult {
     let path = find_external_subcommand(gctx, cmd);
     let command = match path {
@@ -356,6 +361,7 @@ fn search_directories(gctx: &GlobalContext) -> Vec<PathBuf> {
 
 /// Initialize libgit2.
 #[tracing::instrument(skip_all)]
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn init_git(gctx: &GlobalContext) {
     // Disabling the owner validation in git can, in theory, lead to code execution
     // vulnerabilities. However, libgit2 does not launch executables, which is the foundation of
@@ -388,6 +394,7 @@ fn init_git(gctx: &GlobalContext) {
 /// configured to use libcurl instead of the built-in networking support so
 /// that those configuration settings can be used.
 #[tracing::instrument(skip_all)]
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn init_git_transports(gctx: &GlobalContext) {
     match needs_custom_http_transport(gctx) {
         Ok(true) => {}

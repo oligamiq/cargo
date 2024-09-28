@@ -142,6 +142,7 @@ impl<'a> Retry<'a> {
 }
 
 fn maybe_spurious(err: &Error) -> bool {
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     if let Some(git_err) = err.downcast_ref::<git2::Error>() {
         match git_err.class() {
             git2::ErrorClass::Net
@@ -151,6 +152,7 @@ fn maybe_spurious(err: &Error) -> bool {
             _ => (),
         }
     }
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     if let Some(curl_err) = err.downcast_ref::<curl::Error>() {
         if curl_err.is_couldnt_connect()
             || curl_err.is_couldnt_resolve_proxy()
@@ -166,14 +168,23 @@ fn maybe_spurious(err: &Error) -> bool {
             return true;
         }
     }
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    if let Some(fetch_err) = err.downcast_ref::<fetch::Error>() {
+        match fetch_err {
+            _ => return true,
+        }
+    }
+
     if let Some(not_200) = err.downcast_ref::<HttpNotSuccessful>() {
         if 500 <= not_200.code && not_200.code < 600 {
             return true;
         }
     }
 
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     use gix::protocol::transport::IsSpuriousError;
 
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     if let Some(err) = err.downcast_ref::<crate::sources::git::fetch::Error>() {
         if err.is_spurious() {
             return true;

@@ -627,6 +627,23 @@ mod imp {
     }
 }
 
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+mod imp {
+    use super::{Shell, TtyWidth};
+    use std::mem;
+
+    pub fn stderr_width() -> TtyWidth {
+        TtyWidth::NoTty
+    }
+
+    pub fn err_erase_line(shell: &mut Shell) {
+        // This is the "EL - Erase in Line" sequence. It clears from the cursor
+        // to the end of line.
+        // https://en.wikipedia.org/wiki/ANSI_escape_code#CSI_sequences
+        let _ = shell.output.stderr().write_all(b"\x1B[K");
+    }
+}
+
 #[cfg(windows)]
 mod imp {
     use std::{cmp, mem, ptr};

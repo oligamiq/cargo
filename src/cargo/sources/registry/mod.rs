@@ -448,6 +448,7 @@ mod http_remote;
 pub(crate) mod index;
 pub use index::IndexSummary;
 mod local;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 mod remote;
 
 /// Generates a unique name for [`SourceId`] to have a unique path to put their
@@ -489,7 +490,12 @@ impl<'gctx> RegistrySource<'gctx> {
         let ops = if source_id.is_sparse() {
             Box::new(http_remote::HttpRegistry::new(source_id, gctx, &name)?) as Box<_>
         } else {
-            Box::new(remote::RemoteRegistry::new(source_id, gctx, &name)) as Box<_>
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+            {
+                Box::new(remote::RemoteRegistry::new(source_id, gctx, &name)) as Box<_>
+            }
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            anyhow::bail!("remote registries are not supported on this platform")
         };
 
         Ok(RegistrySource::new(

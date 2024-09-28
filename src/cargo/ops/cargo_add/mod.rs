@@ -336,10 +336,17 @@ fn resolve_dependency(
             }
             selected
         } else {
-            let mut source = crate::sources::GitSource::new(src.source_id()?, gctx)?;
-            let packages = source.read_packages()?;
-            let package = infer_package_for_git_source(packages, &src)?;
-            Dependency::from(package.summary())
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+            {
+                let mut source = crate::sources::GitSource::new(src.source_id()?, gctx)?;
+                let packages = source.read_packages()?;
+                let package = infer_package_for_git_source(packages, &src)?;
+                Dependency::from(package.summary())
+            }
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            {
+                anyhow::bail!("git dependencies are not supported on this platform")
+            }
         };
         selected
     } else if let Some(raw_path) = &arg.path {

@@ -148,6 +148,7 @@ pub fn exec(gctx: &mut GlobalContext, args: &ArgMatches) -> CliResult {
 
     let mut from_cwd = false;
 
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     let source = if let Some(url) = args.get_one::<String>("git") {
         let url = url.into_url()?;
         let gitref = if let Some(branch) = args.get_one::<String>("branch") {
@@ -161,6 +162,21 @@ pub fn exec(gctx: &mut GlobalContext, args: &ArgMatches) -> CliResult {
         };
         SourceId::for_git(&url, gitref)?
     } else if let Some(path) = &path {
+        SourceId::for_path(path)?
+    } else if krates.is_empty() {
+        from_cwd = true;
+        SourceId::for_path(gctx.cwd())?
+    } else if let Some(reg_or_index) = args.registry_or_index(gctx)? {
+        match reg_or_index {
+            ops::RegistryOrIndex::Registry(r) => SourceId::alt_registry(gctx, &r)?,
+            ops::RegistryOrIndex::Index(url) => SourceId::for_registry(&url)?,
+        }
+    } else {
+        SourceId::crates_io(gctx)?
+    };
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    let source = if let Some(path) = &path {
         SourceId::for_path(path)?
     } else if krates.is_empty() {
         from_cwd = true;

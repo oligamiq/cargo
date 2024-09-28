@@ -430,11 +430,44 @@ fn is_on_nfs_mount(_path: &Path) -> bool {
     false
 }
 
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+mod sys {
+    use std::fs::File;
+    use std::io::{Error, Result};
+
+    pub(super) fn lock_shared(file: &File) -> Result<()> {
+        Err(Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    pub(super) fn lock_exclusive(file: &File) -> Result<()> {
+        Err(Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    pub(super) fn try_lock_shared(file: &File) -> Result<()> {
+        Err(Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    pub(super) fn try_lock_exclusive(file: &File) -> Result<()> {
+        Err(Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    pub(super) fn unlock(file: &File) -> Result<()> {
+        Err(Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    pub(super) fn error_contended(err: &Error) -> bool {
+        err.raw_os_error().map_or(false, |x| x == libc::EWOULDBLOCK)
+    }
+
+    pub(super) fn error_unsupported(err: &Error) -> bool {
+        true
+    }
+}
+
 #[cfg(unix)]
 mod sys {
     use std::fs::File;
     use std::io::{Error, Result};
-    use std::os::unix::io::AsRawFd;
 
     pub(super) fn lock_shared(file: &File) -> Result<()> {
         flock(file, libc::LOCK_SH)

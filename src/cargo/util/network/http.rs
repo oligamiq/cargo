@@ -4,9 +4,13 @@ use std::str;
 use std::time::Duration;
 
 use anyhow::bail;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::Easy;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::InfoType;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::SslOpt;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::SslVersion;
 use tracing::debug;
 use tracing::trace;
@@ -18,12 +22,14 @@ use crate::CargoResult;
 use crate::GlobalContext;
 
 /// Creates a new HTTP handle with appropriate global configuration for cargo.
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub fn http_handle(gctx: &GlobalContext) -> CargoResult<Easy> {
     let (mut handle, timeout) = http_handle_and_timeout(gctx)?;
     timeout.configure(&mut handle)?;
     Ok(handle)
 }
 
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub fn http_handle_and_timeout(gctx: &GlobalContext) -> CargoResult<(Easy, HttpTimeout)> {
     if gctx.frozen() {
         bail!(
@@ -58,6 +64,7 @@ pub fn needs_custom_http_transport(gctx: &GlobalContext) -> CargoResult<bool> {
 }
 
 /// Configure a libcurl http handle with the defaults options for Cargo
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub fn configure_http_handle(gctx: &GlobalContext, handle: &mut Easy) -> CargoResult<HttpTimeout> {
     let http = gctx.http_config()?;
     if let Some(proxy) = super::proxy::http_proxy(http) {
@@ -212,6 +219,7 @@ impl HttpTimeout {
         })
     }
 
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn configure(&self, handle: &mut Easy) -> CargoResult<()> {
         // The timeout option for libcurl by default times out the entire
         // transfer, but we probably don't want this. Instead we only set

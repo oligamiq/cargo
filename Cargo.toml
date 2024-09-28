@@ -35,8 +35,8 @@ cargo-test-support = { version = "0.4.0", path = "crates/cargo-test-support" }
 cargo-util = { version = "0.2.14", path = "crates/cargo-util" }
 cargo-util-schemas = { version = "0.6.0", path = "crates/cargo-util-schemas" }
 cargo_metadata = "0.18.1"
-clap = "4.5.17"
-clap_complete = { version = "4.5.28", features = ["unstable-dynamic"] }
+clap = { git = "https://github.com/oligamiq/clap" }
+clap_complete = { git = "https://github.com/oligamiq/clap", features = ["unstable-dynamic"] }
 color-print = "0.3.6"
 completest-pty = "0.5.3"
 core-foundation = { version = "0.10.0", features = ["mac_os_10_7_support"] }
@@ -53,7 +53,7 @@ glob = "0.3.1"
 handlebars = { version = "5.1.2", features = ["dir_source"] }
 hex = "0.4.3"
 hmac = "0.12.1"
-home = "0.5.9"
+home = { path = "crates/home" }
 http-auth = { version = "0.1.9", default-features = false }
 humantime = "2.1.0"
 ignore = "0.4.22"
@@ -79,7 +79,8 @@ proptest = "1.5.0"
 pulldown-cmark = { version = "0.11.0", default-features = false, features = ["html"] }
 rand = "0.8.5"
 regex = "1.10.5"
-rusqlite = { version = "0.32.0", features = ["bundled"] }
+# rusqlite = { version = "0.32.0", features = ["bundled"] }
+rusqlite = { git = "https://github.com/oligamiq/rusqlite", features = ["bundled"] }
 rustfix = { version = "0.8.2", path = "crates/rustfix" }
 same-file = "1.0.6"
 security-framework = "2.11.1"
@@ -111,6 +112,7 @@ url = "2.5.2"
 varisat = "0.2.2"
 walkdir = "2.5.0"
 windows-sys = "0.59"
+fetch = { version = "0.1.0", path = "crates/fetch" }
 
 [workspace.lints.rust]
 rust_2018_idioms = "warn" # TODO: could this be removed?
@@ -158,13 +160,8 @@ clap = { workspace = true, features = ["wrap_help"] }
 clap_complete.workspace = true
 color-print.workspace = true
 crates-io.workspace = true
-curl = { workspace = true, features = ["http2"] }
-curl-sys.workspace = true
 filetime.workspace = true
 flate2.workspace = true
-git2.workspace = true
-git2-curl.workspace = true
-gix.workspace = true
 glob.workspace = true
 hex.workspace = true
 hmac.workspace = true
@@ -177,7 +174,6 @@ indexmap.workspace = true
 itertools.workspace = true
 jobserver.workspace = true
 lazycell.workspace = true
-libgit2-sys.workspace = true
 memchr.workspace = true
 opener.workspace = true
 os_info.workspace = true
@@ -221,7 +217,7 @@ cargo-credential-libsecret.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 cargo-credential-macos-keychain.workspace = true
 
-[target.'cfg(not(windows))'.dependencies]
+[target.'cfg(not(any(windows, all(target_os = "wasi", target_env = "p1"))))'.dependencies]
 openssl = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
@@ -238,6 +234,18 @@ features = [
   "Win32_System_JobObjects",
   "Win32_System_Threading",
 ]
+
+[target.'cfg(not(all(target_os = "wasi", target_env = "p1")))'.dependencies]
+gix.workspace = true
+curl = { workspace = true, features = ["http2"] }
+curl-sys.workspace = true
+libgit2-sys.workspace = true
+git2.workspace = true
+git2-curl.workspace = true
+
+[target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
+fetch.workspace = true
+# libc.workspace = true
 
 [dev-dependencies]
 annotate-snippets = { workspace = true, features = ["testing-colors"] }

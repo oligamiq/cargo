@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceKind {
     /// A git repository.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     Git(GitReference),
     /// A local path.
     Path,
@@ -21,6 +22,7 @@ impl SourceKind {
     pub fn protocol(&self) -> Option<&str> {
         match self {
             SourceKind::Path => Some("path"),
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             SourceKind::Git(_) => Some("git"),
             SourceKind::Registry => Some("registry"),
             // Sparse registry URL already includes the `sparse+` prefix, see `SourceId::new`
@@ -107,6 +109,7 @@ impl Ord for SourceKind {
             (SourceKind::Directory, _) => Ordering::Less,
             (_, SourceKind::Directory) => Ordering::Greater,
 
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             (SourceKind::Git(a), SourceKind::Git(b)) => a.cmp(b),
         }
     }

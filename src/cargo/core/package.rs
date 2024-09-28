@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use bytesize::ByteSize;
 use cargo_util_schemas::manifest::RustVersion;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::Easy;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::multi::{EasyHandle, Multi};
 use lazycell::LazyCell;
 use semver::Version;
@@ -31,6 +33,7 @@ use crate::sources::source::{MaybePackage, SourceMap};
 use crate::util::cache_lock::{CacheLock, CacheLockMode};
 use crate::util::errors::{CargoResult, HttpNotSuccessful};
 use crate::util::interning::InternedString;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use crate::util::network::http::http_handle_and_timeout;
 use crate::util::network::http::HttpTimeout;
 use crate::util::network::retry::{Retry, RetryResult};
@@ -294,6 +297,7 @@ pub struct PackageSet<'gctx> {
     packages: HashMap<PackageId, LazyCell<Package>>,
     sources: RefCell<SourceMap<'gctx>>,
     gctx: &'gctx GlobalContext,
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     multi: Multi,
     /// Used to prevent reusing the PackageSet to download twice.
     downloading: Cell<bool>,
@@ -307,17 +311,26 @@ pub struct Downloads<'a, 'gctx> {
     /// When a download is started, it is added to this map. The key is a
     /// "token" (see `Download::token`). It is removed once the download is
     /// finished.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pending: HashMap<usize, (Download<'gctx>, EasyHandle)>,
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    pending: HashMap<usize, (Download<'gctx>, ())>,
     /// Set of packages currently being downloaded. This should stay in sync
     /// with `pending`.
     pending_ids: HashSet<PackageId>,
     /// Downloads that have failed and are waiting to retry again later.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     sleeping: SleepTracker<(Download<'gctx>, Easy)>,
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    sleeping: SleepTracker<(Download<'gctx>, ())>,
     /// The final result of each download. A pair `(token, result)`. This is a
     /// temporary holding area, needed because curl can report multiple
     /// downloads at once, but the main loop (`wait`) is written to only
     /// handle one at a time.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     results: Vec<(usize, Result<(), curl::Error>)>,
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    results: Vec<(usize, Result<(), fetch::Error>)>,
     /// The next ID to use for creating a token (see `Download::token`).
     next: usize,
     /// Progress bar.
@@ -400,13 +413,19 @@ impl<'gctx> PackageSet<'gctx> {
     ) -> CargoResult<PackageSet<'gctx>> {
         // We've enabled the `http2` feature of `curl` in Cargo, so treat
         // failures here as fatal as it would indicate a build-time problem.
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         let mut multi = Multi::new();
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         let multiplexing = gctx.http_config()?.multiplexing.unwrap_or(true);
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        let multiplexing = false;
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         multi
             .pipelining(false, multiplexing)
             .context("failed to enable multiplexing/pipelining in curl")?;
 
         // let's not flood crates.io with connections
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         multi.set_max_host_connections(2)?;
 
         Ok(PackageSet {
@@ -416,6 +435,7 @@ impl<'gctx> PackageSet<'gctx> {
                 .collect(),
             sources: RefCell::new(sources),
             gctx,
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             multi,
             downloading: Cell::new(false),
             multiplexing,
@@ -715,53 +735,76 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
         debug!(target: "network", "downloading {} as {}", id, token);
         assert!(self.pending_ids.insert(id));
 
-        let (mut handle, _timeout) = http_handle_and_timeout(self.set.gctx)?;
-        handle.get(true)?;
-        handle.url(&url)?;
-        handle.follow_location(true)?; // follow redirects
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            let (mut handle, _timeout) = http_handle_and_timeout(self.set.gctx)?;
+            handle.get(true)?;
+            handle.url(&url)?;
+            handle.follow_location(true)?; // follow redirects
 
-        // Add authorization header.
-        if let Some(authorization) = authorization {
-            let mut headers = curl::easy::List::new();
-            headers.append(&format!("Authorization: {}", authorization))?;
-            handle.http_headers(headers)?;
+            // Add authorization header.
+            if let Some(authorization) = authorization {
+                let mut headers = curl::easy::List::new();
+                headers.append(&format!("Authorization: {}", authorization))?;
+                handle.http_headers(headers)?;
+            }
+
+            // Enable HTTP/2 if possible.
+            crate::try_old_curl_http2_pipewait!(self.set.multiplexing, handle);
+
+            handle.write_function(move |buf| {
+                debug!(target: "network", "{} - {} bytes of data", token, buf.len());
+                tls::with(|downloads| {
+                    if let Some(downloads) = downloads {
+                        downloads.pending[&token]
+                            .0
+                            .data
+                            .borrow_mut()
+                            .extend_from_slice(buf);
+                    }
+                });
+                Ok(buf.len())
+            })?;
+            handle.header_function(move |data| {
+                tls::with(|downloads| {
+                    if let Some(downloads) = downloads {
+                        // Headers contain trailing \r\n, trim them to make it easier
+                        // to work with.
+                        let h = String::from_utf8_lossy(data).trim().to_string();
+                        downloads.pending[&token].0.headers.borrow_mut().push(h);
+                    }
+                });
+                true
+            })?;
+
+            handle.progress(true)?;
+            handle.progress_function(move |dl_total, dl_cur, _, _| {
+                tls::with(|downloads| match downloads {
+                    Some(d) => d.progress(token, dl_total as u64, dl_cur as u64),
+                    None => false,
+                })
+            })?;
         }
 
-        // Enable HTTP/2 if possible.
-        crate::try_old_curl_http2_pipewait!(self.set.multiplexing, handle);
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            let mut headers = vec![];
+            if let Some(authorization) = authorization {
+                headers.push((String::from("Authorization"), authorization));
+            }
 
-        handle.write_function(move |buf| {
-            debug!(target: "network", "{} - {} bytes of data", token, buf.len());
-            tls::with(|downloads| {
-                if let Some(downloads) = downloads {
-                    downloads.pending[&token]
-                        .0
-                        .data
-                        .borrow_mut()
-                        .extend_from_slice(buf);
-                }
-            });
-            Ok(buf.len())
-        })?;
-        handle.header_function(move |data| {
-            tls::with(|downloads| {
-                if let Some(downloads) = downloads {
-                    // Headers contain trailing \r\n, trim them to make it easier
-                    // to work with.
-                    let h = String::from_utf8_lossy(data).trim().to_string();
-                    downloads.pending[&token].0.headers.borrow_mut().push(h);
-                }
-            });
-            true
-        })?;
+            let response = fetch::fetch(url.clone(), "GET", headers, vec![])?;
+            debug!(target: "network", "{} - {} bytes of data", token, response.body.len());
+            self.pending[&token]
+                .0
+                .data
+                .borrow_mut()
+                .extend_from_slice(&response.body);
 
-        handle.progress(true)?;
-        handle.progress_function(move |dl_total, dl_cur, _, _| {
-            tls::with(|downloads| match downloads {
-                Some(d) => d.progress(token, dl_total as u64, dl_cur as u64),
-                None => false,
-            })
-        })?;
+            for header in response.headers {
+                self.pending[&token].0.headers.borrow_mut().push(format!("{}: {}", header.0, header.1));
+            }
+        }
 
         // If the progress bar isn't enabled then it may be awhile before the
         // first crate finishes downloading so we inform immediately that we're
@@ -786,7 +829,10 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
             timed_out: Cell::new(None),
             retry: Retry::new(self.set.gctx)?,
         };
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         self.enqueue(dl, handle)?;
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        self.enqueue(dl)?;
         self.tick(WhyTick::DownloadStarted)?;
 
         Ok(None)
@@ -812,12 +858,19 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
             let (token, result) = self.wait_for_curl()?;
             debug!(target: "network", "{} finished with {:?}", token, result);
 
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             let (mut dl, handle) = self
+                .pending
+                .remove(&token)
+                .expect("got a token for a non-in-progress transfer");
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            let (mut dl, _) = self
                 .pending
                 .remove(&token)
                 .expect("got a token for a non-in-progress transfer");
             let data = mem::take(&mut *dl.data.borrow_mut());
             let headers = mem::take(&mut *dl.headers.borrow_mut());
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             let mut handle = self.set.multi.remove(handle)?;
             self.pending_ids.remove(&dl.id);
 
@@ -836,31 +889,43 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
                         // If one is found we switch the error code (to ensure
                         // it's flagged as spurious) and then attach our extra
                         // information to the error.
+                        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
                         if !e.is_aborted_by_callback() {
                             return Err(e.into());
                         }
 
                         return Err(match timed_out.replace(None) {
                             Some(msg) => {
-                                let code = curl_sys::CURLE_OPERATION_TIMEDOUT;
-                                let mut err = curl::Error::new(code);
-                                err.set_extra(msg);
-                                err
+                                #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+                                {
+                                    let code = curl_sys::CURLE_OPERATION_TIMEDOUT;
+                                    let mut err = curl::Error::new(code);
+                                    err.set_extra(msg);
+                                    err
+                                }
+                                #[cfg(all(target_os = "wasi", target_env = "p1"))]
+                                {
+                                    let err = fetch::Error::Fetch(-1);
+                                    err
+                                }
                             }
                             None => e,
                         }
                         .into());
                     }
 
-                    let code = handle.response_code()?;
-                    if code != 200 && code != 0 {
-                        return Err(HttpNotSuccessful::new_from_handle(
-                            &mut handle,
-                            &url,
-                            data,
-                            headers,
-                        )
-                        .into());
+                    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+                    {
+                        let code = handle.response_code()?;
+                        if code != 200 && code != 0 {
+                            return Err(HttpNotSuccessful::new_from_handle(
+                                &mut handle,
+                                &url,
+                                data,
+                                headers,
+                            )
+                            .into());
+                        }
                     }
                     Ok(data)
                 })
@@ -872,7 +937,11 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
                 }
                 RetryResult::Retry(sleep) => {
                     debug!(target: "network", "download retry {} for {sleep}ms", dl.url);
+                    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
                     self.sleeping.push(sleep, (dl, handle));
+
+                    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+                    self.sleeping.push(sleep, (dl, ()));
                 }
             }
         };
@@ -923,6 +992,7 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
         Ok(slot.borrow().unwrap())
     }
 
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     fn enqueue(&mut self, dl: Download<'gctx>, handle: Easy) -> CargoResult<()> {
         let mut handle = self.set.multi.add(handle)?;
         let now = Instant::now();
@@ -938,8 +1008,23 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
         Ok(())
     }
 
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    fn enqueue(&mut self, dl: Download<'gctx>) -> CargoResult<()> {
+        let now = Instant::now();
+        self.updated_at.set(now);
+        self.next_speed_check.set(now + self.timeout.dur);
+        self.next_speed_check_bytes_threshold
+            .set(u64::from(self.timeout.low_speed_limit));
+        dl.timed_out.set(None);
+        dl.current.set(0);
+        dl.total.set(0);
+        self.pending.insert(dl.token, (dl, ()));
+        Ok(())
+    }
+
     /// Block, waiting for curl. Returns a token and a `Result` for that token
     /// (`Ok` means the download successfully finished).
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     fn wait_for_curl(&mut self) -> CargoResult<(usize, Result<(), curl::Error>)> {
         // This is the main workhorse loop. We use libcurl's portable `wait`
         // method to actually perform blocking. This isn't necessarily too
@@ -997,10 +1082,27 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
         }
     }
 
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    fn wait_for_curl(&mut self) -> CargoResult<(usize, Result<(), fetch::Error>)> {
+        loop {
+            self.add_sleepers()?;
+            let results = &mut self.results;
+            let pending = &self.pending;
+
+            break Ok(results.pop().unwrap());
+        }
+    }
+
     fn add_sleepers(&mut self) -> CargoResult<()> {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         for (dl, handle) in self.sleeping.to_retry() {
             self.pending_ids.insert(dl.id);
             self.enqueue(dl, handle)?;
+        }
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        for (dl, _) in self.sleeping.to_retry() {
+            self.pending_ids.insert(dl.id);
+            self.enqueue(dl)?;
         }
         Ok(())
     }

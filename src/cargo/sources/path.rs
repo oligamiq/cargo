@@ -19,8 +19,11 @@ use crate::util::GlobalContext;
 use anyhow::Context as _;
 use cargo_util::paths;
 use filetime::FileTime;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use gix::bstr::{BString, ByteVec};
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use gix::dir::entry::Status;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use gix::index::entry::Stage;
 use ignore::gitignore::GitignoreBuilder;
 use tracing::{debug, info, trace, warn};
@@ -458,11 +461,14 @@ pub fn list_files(pkg: &Package, gctx: &GlobalContext) -> CargoResult<Vec<PathBu
 fn _list_files(pkg: &Package, gctx: &GlobalContext) -> CargoResult<Vec<PathBuf>> {
     let root = pkg.root();
     let no_include_option = pkg.manifest().include().is_empty();
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     let git_repo = if no_include_option {
         discover_gix_repo(root)?
     } else {
         None
     };
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    let git_repo: Option<()> = None;
 
     let mut exclude_builder = GitignoreBuilder::new(root);
     if no_include_option && git_repo.is_none() {
@@ -516,6 +522,7 @@ fn _list_files(pkg: &Package, gctx: &GlobalContext) -> CargoResult<Vec<PathBuf>>
 
     // Attempt Git-prepopulate only if no `include` (see rust-lang/cargo#4135).
     if no_include_option {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         if let Some(repo) = git_repo {
             return list_files_gix(pkg, &repo, &filter, gctx);
         }
@@ -528,6 +535,7 @@ fn _list_files(pkg: &Package, gctx: &GlobalContext) -> CargoResult<Vec<PathBuf>>
 /// Returns [`Some(gix::Repository)`](gix::Repository) if the discovered repository
 /// (searched upwards from `root`) contains a tracked `<root>/Cargo.toml`.
 /// Otherwise, the caller should fall back on full file list.
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn discover_gix_repo(root: &Path) -> CargoResult<Option<gix::Repository>> {
     let repo = match gix::ThreadSafeRepository::discover(root) {
         Ok(repo) => repo.to_thread_local(),
@@ -576,6 +584,7 @@ fn discover_gix_repo(root: &Path) -> CargoResult<Option<gix::Repository>> {
 /// This looks into Git sub-repositories as well, resolving them to individual files.
 /// Symlinks to directories will also be resolved, but walked as repositories if they
 /// point to one to avoid picking up `.git` directories.
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn list_files_gix(
     pkg: &Package,
     repo: &gix::Repository,
@@ -1011,6 +1020,7 @@ fn read_nested_packages(
             //
             // See https://github.com/rust-lang/cargo/issues/6822.
             if let Err(err) = result {
+                #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
                 if source_id.is_git() {
                     info!(
                         "skipping nested package found at `{}`: {:?}",
@@ -1021,6 +1031,8 @@ fn read_nested_packages(
                 } else {
                     return Err(err);
                 }
+                #[cfg(all(target_os = "wasi", target_env = "p1"))]
+                return Err(err);
             }
         }
     }

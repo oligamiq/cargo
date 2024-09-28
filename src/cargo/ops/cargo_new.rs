@@ -2,7 +2,10 @@ use crate::core::{Edition, Shell, Workspace};
 use crate::util::errors::CargoResult;
 use crate::util::important_paths::find_root_manifest_for_wd;
 use crate::util::toml_mut::is_sorted;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use crate::util::{existing_vcs_repo, FossilRepo, GitRepo, HgRepo, PijulRepo};
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+use crate::util::{existing_vcs_repo, FossilRepo, HgRepo, PijulRepo};
 use crate::util::{restricted_names, GlobalContext};
 use anyhow::{anyhow, Context as _};
 use cargo_util::paths::{self, write_atomic};
@@ -19,6 +22,7 @@ use toml_edit::{Array, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VersionControl {
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     Git,
     Hg,
     Pijul,
@@ -31,6 +35,7 @@ impl FromStr for VersionControl {
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
         match s {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             "git" => Ok(VersionControl::Git),
             "hg" => Ok(VersionControl::Hg),
             "pijul" => Ok(VersionControl::Pijul),
@@ -523,6 +528,7 @@ pub fn init(opts: &NewOptions, gctx: &GlobalContext) -> CargoResult<NewProjectKi
     if version_control == None {
         let mut num_detected_vcses = 0;
 
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         if path.join(".git").exists() {
             version_control = Some(VersionControl::Git);
             num_detected_vcses += 1;
@@ -681,6 +687,7 @@ fn write_ignore_file(base_path: &Path, list: &IgnoreList, vcs: VersionControl) -
     }
 
     for fp_ignore in match vcs {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         VersionControl::Git => vec![base_path.join(".gitignore")],
         VersionControl::Hg => vec![base_path.join(".hgignore")],
         VersionControl::Pijul => vec![base_path.join(".ignore")],
@@ -708,6 +715,7 @@ fn write_ignore_file(base_path: &Path, list: &IgnoreList, vcs: VersionControl) -
 /// Initializes the correct VCS system based on the provided config.
 fn init_vcs(path: &Path, vcs: VersionControl, gctx: &GlobalContext) -> CargoResult<()> {
     match vcs {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         VersionControl::Git => {
             if !path.join(".git").exists() {
                 // Temporary fix to work around bug in libgit2 when creating a
@@ -753,9 +761,12 @@ fn mk(gctx: &GlobalContext, opts: &MkOptions<'_>) -> CargoResult<()> {
     let vcs = opts.version_control.unwrap_or_else(|| {
         let in_existing_vcs = existing_vcs_repo(path.parent().unwrap_or(path), gctx.cwd());
         match (cfg.version_control, in_existing_vcs) {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             (None, false) => VersionControl::Git,
             (Some(opt), false) => opt,
             (_, true) => VersionControl::NoVcs,
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            _ => VersionControl::NoVcs,
         }
     });
 

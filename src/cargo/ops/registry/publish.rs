@@ -138,126 +138,132 @@ pub fn publish(ws: &Workspace<'_>, opts: &PublishOpts<'_>) -> CargoResult<()> {
         }
     }
 
-    let pkg_dep_graph = ops::cargo_package::package_with_dep_graph(
-        ws,
-        &PackageOpts {
-            gctx: opts.gctx,
-            verify: opts.verify,
-            list: false,
-            check_metadata: true,
-            allow_dirty: opts.allow_dirty,
-            // `package_with_dep_graph` ignores this field in favor of
-            // the already-resolved list of packages
-            to_package: ops::Packages::Default,
-            targets: opts.targets.clone(),
-            jobs: opts.jobs.clone(),
-            keep_going: opts.keep_going,
-            cli_features: opts.cli_features.clone(),
-            reg_or_index: reg_or_index.clone(),
-        },
-        pkgs,
-    )?;
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    return anyhow::bail!("publishing is not supported on this platform");
 
-    let mut plan = PublishPlan::new(&pkg_dep_graph.graph);
-    // May contains packages from previous rounds as `wait_for_any_publish_confirmation` returns
-    // after it confirms any packages, not all packages, requiring us to handle the rest in the next
-    // iteration.
-    //
-    // As a side effect, any given package's "effective" timeout may be much larger.
-    let mut to_confirm = BTreeSet::new();
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+    {
+        let pkg_dep_graph = ops::cargo_package::package_with_dep_graph(
+            ws,
+            &PackageOpts {
+                gctx: opts.gctx,
+                verify: opts.verify,
+                list: false,
+                check_metadata: true,
+                allow_dirty: opts.allow_dirty,
+                // `package_with_dep_graph` ignores this field in favor of
+                // the already-resolved list of packages
+                to_package: ops::Packages::Default,
+                targets: opts.targets.clone(),
+                jobs: opts.jobs.clone(),
+                keep_going: opts.keep_going,
+                cli_features: opts.cli_features.clone(),
+                reg_or_index: reg_or_index.clone(),
+            },
+            pkgs,
+        )?;
 
-    while !plan.is_empty() {
-        // There might not be any ready package, if the previous confirmations
-        // didn't unlock a new one. For example, if `c` depends on `a` and
-        // `b`, and we uploaded `a` and `b` but only confirmed `a`, then on
-        // the following pass through the outer loop nothing will be ready for
-        // upload.
-        for pkg_id in plan.take_ready() {
-            let (pkg, (_features, tarball)) = &pkg_dep_graph.packages[&pkg_id];
-            opts.gctx.shell().status("Uploading", pkg.package_id())?;
+        let mut plan = PublishPlan::new(&pkg_dep_graph.graph);
+        // May contains packages from previous rounds as `wait_for_any_publish_confirmation` returns
+        // after it confirms any packages, not all packages, requiring us to handle the rest in the next
+        // iteration.
+        //
+        // As a side effect, any given package's "effective" timeout may be much larger.
+        let mut to_confirm = BTreeSet::new();
 
-            if !opts.dry_run {
-                let ver = pkg.version().to_string();
+        while !plan.is_empty() {
+            // There might not be any ready package, if the previous confirmations
+            // didn't unlock a new one. For example, if `c` depends on `a` and
+            // `b`, and we uploaded `a` and `b` but only confirmed `a`, then on
+            // the following pass through the outer loop nothing will be ready for
+            // upload.
+            for pkg_id in plan.take_ready() {
+                let (pkg, (_features, tarball)) = &pkg_dep_graph.packages[&pkg_id];
+                opts.gctx.shell().status("Uploading", pkg.package_id())?;
 
-                tarball.file().seek(SeekFrom::Start(0))?;
-                let hash = cargo_util::Sha256::new()
-                    .update_file(tarball.file())?
-                    .finish_hex();
-                let operation = Operation::Publish {
-                    name: pkg.name().as_str(),
-                    vers: &ver,
-                    cksum: &hash,
-                };
-                registry.set_token(Some(auth::auth_token(
-                    &opts.gctx,
-                    &source_ids.original,
-                    None,
-                    operation,
-                    vec![],
-                    false,
-                )?));
-            }
+                if !opts.dry_run {
+                    let ver = pkg.version().to_string();
 
-            transmit(
-                opts.gctx,
-                ws,
-                pkg,
-                tarball.file(),
-                &mut registry,
-                source_ids.original,
-                opts.dry_run,
-            )?;
-            to_confirm.insert(pkg_id);
+                    tarball.file().seek(SeekFrom::Start(0))?;
+                    let hash = cargo_util::Sha256::new()
+                        .update_file(tarball.file())?
+                        .finish_hex();
+                    let operation = Operation::Publish {
+                        name: pkg.name().as_str(),
+                        vers: &ver,
+                        cksum: &hash,
+                    };
+                    registry.set_token(Some(auth::auth_token(
+                        &opts.gctx,
+                        &source_ids.original,
+                        None,
+                        operation,
+                        vec![],
+                        false,
+                    )?));
+                }
 
-            if !opts.dry_run {
-                // Short does not include the registry name.
-                let short_pkg_description = format!("{} v{}", pkg.name(), pkg.version());
-                let source_description = source_ids.original.to_string();
-                ws.gctx().shell().status(
-                    "Uploaded",
-                    format!("{short_pkg_description} to {source_description}"),
-                )?;
-            }
-        }
-
-        let confirmed = if opts.dry_run {
-            to_confirm.clone()
-        } else {
-            const DEFAULT_TIMEOUT: u64 = 60;
-            let timeout = if opts.gctx.cli_unstable().publish_timeout {
-                let timeout: Option<u64> = opts.gctx.get("publish.timeout")?;
-                timeout.unwrap_or(DEFAULT_TIMEOUT)
-            } else {
-                DEFAULT_TIMEOUT
-            };
-            if 0 < timeout {
-                let timeout = Duration::from_secs(timeout);
-                wait_for_any_publish_confirmation(
+                transmit(
                     opts.gctx,
+                    ws,
+                    pkg,
+                    tarball.file(),
+                    &mut registry,
                     source_ids.original,
-                    &to_confirm,
-                    timeout,
-                )?
-            } else {
-                BTreeSet::new()
+                    opts.dry_run,
+                )?;
+                to_confirm.insert(pkg_id);
+
+                if !opts.dry_run {
+                    // Short does not include the registry name.
+                    let short_pkg_description = format!("{} v{}", pkg.name(), pkg.version());
+                    let source_description = source_ids.original.to_string();
+                    ws.gctx().shell().status(
+                        "Uploaded",
+                        format!("{short_pkg_description} to {source_description}"),
+                    )?;
+                }
             }
-        };
-        if confirmed.is_empty() {
-            // If nothing finished, it means we timed out while waiting for confirmation.
-            // We're going to exit, but first we need to check: have we uploaded everything?
-            if plan.is_empty() {
-                // It's ok that we timed out, because nothing was waiting on dependencies to
-                // be confirmed.
-                break;
+
+            let confirmed = if opts.dry_run {
+                to_confirm.clone()
             } else {
-                let failed_list = package_list(plan.iter(), "and");
-                bail!("unable to publish {failed_list} due to time out while waiting for published dependencies to be available.");
+                const DEFAULT_TIMEOUT: u64 = 60;
+                let timeout = if opts.gctx.cli_unstable().publish_timeout {
+                    let timeout: Option<u64> = opts.gctx.get("publish.timeout")?;
+                    timeout.unwrap_or(DEFAULT_TIMEOUT)
+                } else {
+                    DEFAULT_TIMEOUT
+                };
+                if 0 < timeout {
+                    let timeout = Duration::from_secs(timeout);
+                    wait_for_any_publish_confirmation(
+                        opts.gctx,
+                        source_ids.original,
+                        &to_confirm,
+                        timeout,
+                    )?
+                } else {
+                    BTreeSet::new()
+                }
+            };
+            if confirmed.is_empty() {
+                // If nothing finished, it means we timed out while waiting for confirmation.
+                // We're going to exit, but first we need to check: have we uploaded everything?
+                if plan.is_empty() {
+                    // It's ok that we timed out, because nothing was waiting on dependencies to
+                    // be confirmed.
+                    break;
+                } else {
+                    let failed_list = package_list(plan.iter(), "and");
+                    bail!("unable to publish {failed_list} due to time out while waiting for published dependencies to be available.");
+                }
             }
+            for id in &confirmed {
+                to_confirm.remove(id);
+            }
+            plan.mark_confirmed(confirmed);
         }
-        for id in &confirmed {
-            to_confirm.remove(id);
-        }
-        plan.mark_confirmed(confirmed);
     }
 
     Ok(())

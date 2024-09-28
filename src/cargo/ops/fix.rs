@@ -194,61 +194,67 @@ fn check_version_control(gctx: &GlobalContext, opts: &FixOptions) -> CargoResult
         return Ok(());
     }
 
-    let mut dirty_files = Vec::new();
-    let mut staged_files = Vec::new();
-    if let Ok(repo) = git2::Repository::discover(gctx.cwd()) {
-        let mut repo_opts = git2::StatusOptions::new();
-        repo_opts.include_ignored(false);
-        repo_opts.include_untracked(true);
-        for status in repo.statuses(Some(&mut repo_opts))?.iter() {
-            if let Some(path) = status.path() {
-                match status.status() {
-                    git2::Status::CURRENT => (),
-                    git2::Status::INDEX_NEW
-                    | git2::Status::INDEX_MODIFIED
-                    | git2::Status::INDEX_DELETED
-                    | git2::Status::INDEX_RENAMED
-                    | git2::Status::INDEX_TYPECHANGE => {
-                        if !opts.allow_staged {
-                            staged_files.push(path.to_string())
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    return Ok(());
+
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+    {
+        let mut dirty_files = Vec::new();
+        let mut staged_files = Vec::new();
+        if let Ok(repo) = git2::Repository::discover(gctx.cwd()) {
+            let mut repo_opts = git2::StatusOptions::new();
+            repo_opts.include_ignored(false);
+            repo_opts.include_untracked(true);
+            for status in repo.statuses(Some(&mut repo_opts))?.iter() {
+                if let Some(path) = status.path() {
+                    match status.status() {
+                        git2::Status::CURRENT => (),
+                        git2::Status::INDEX_NEW
+                        | git2::Status::INDEX_MODIFIED
+                        | git2::Status::INDEX_DELETED
+                        | git2::Status::INDEX_RENAMED
+                        | git2::Status::INDEX_TYPECHANGE => {
+                            if !opts.allow_staged {
+                                staged_files.push(path.to_string())
+                            }
                         }
-                    }
-                    _ => {
-                        if !opts.allow_dirty {
-                            dirty_files.push(path.to_string())
+                        _ => {
+                            if !opts.allow_dirty {
+                                dirty_files.push(path.to_string())
+                            }
                         }
-                    }
-                };
+                    };
+                }
             }
         }
-    }
 
-    if dirty_files.is_empty() && staged_files.is_empty() {
-        return Ok(());
-    }
+        if dirty_files.is_empty() && staged_files.is_empty() {
+            return Ok(());
+        }
 
-    let mut files_list = String::new();
-    for file in dirty_files {
-        files_list.push_str("  * ");
-        files_list.push_str(&file);
-        files_list.push_str(" (dirty)\n");
-    }
-    for file in staged_files {
-        files_list.push_str("  * ");
-        files_list.push_str(&file);
-        files_list.push_str(" (staged)\n");
-    }
+        let mut files_list = String::new();
+        for file in dirty_files {
+            files_list.push_str("  * ");
+            files_list.push_str(&file);
+            files_list.push_str(" (dirty)\n");
+        }
+        for file in staged_files {
+            files_list.push_str("  * ");
+            files_list.push_str(&file);
+            files_list.push_str(" (staged)\n");
+        }
 
-    bail!(
-        "the working directory of this package has uncommitted changes, and \
-         `cargo fix` can potentially perform destructive changes; if you'd \
-         like to suppress this error pass `--allow-dirty`, `--allow-staged`, \
-         or commit the changes to these files:\n\
-         \n\
-         {}\n\
-         ",
-        files_list
-    );
+        bail!(
+            "the working directory of this package has uncommitted changes, and \
+            `cargo fix` can potentially perform destructive changes; if you'd \
+            like to suppress this error pass `--allow-dirty`, `--allow-staged`, \
+            or commit the changes to these files:\n\
+            \n\
+            {}\n\
+            ",
+            files_list
+        );
+    }
 }
 
 fn migrate_manifests(ws: &Workspace<'_>, pkgs: &[&Package]) -> CargoResult<()> {

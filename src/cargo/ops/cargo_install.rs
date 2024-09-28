@@ -8,7 +8,10 @@ use crate::core::{Dependency, Edition, Package, PackageId, SourceId, Target, Wor
 use crate::ops::{common_for_install_and_uninstall::*, FilterRule};
 use crate::ops::{CompileFilter, Packages};
 use crate::sources::source::Source;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use crate::sources::{GitSource, PathSource, SourceConfigMap};
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+use crate::sources::{PathSource, SourceConfigMap};
 use crate::util::errors::CargoResult;
 use crate::util::{Filesystem, GlobalContext, Rustc};
 use crate::{drop_println, ops};
@@ -16,6 +19,8 @@ use crate::{drop_println, ops};
 use anyhow::{bail, Context as _};
 use cargo_util::paths;
 use cargo_util_schemas::core::PartialVersion;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+use gix::discover::is_git;
 use itertools::Itertools;
 use semver::VersionReq;
 use tempfile::Builder as TempFileBuilder;
@@ -98,6 +103,8 @@ impl<'gctx> InstallablePackage<'gctx> {
                 }
             };
 
+            let mut is_git = false;
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             if source_id.is_git() {
                 let mut source = GitSource::new(source_id, gctx)?;
                 select_pkg(
@@ -106,8 +113,10 @@ impl<'gctx> InstallablePackage<'gctx> {
                     |git: &mut GitSource<'_>| git.read_packages(),
                     gctx,
                     current_rust_version,
-                )?
-            } else if source_id.is_path() {
+                )?;
+                is_git = true;
+            }
+            if !is_git && source_id.is_path() {
                 let mut src = path_source(source_id, gctx)?;
                 if !src.path().is_dir() {
                     bail!(
@@ -189,6 +198,7 @@ impl<'gctx> InstallablePackage<'gctx> {
                 pkg.to_string()
             ))?;
         }
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         let pkg = if source_id.is_git() {
             // Don't use ws.current() in order to keep the package source as a git source so that
             // install tracking uses the correct source.
@@ -196,6 +206,9 @@ impl<'gctx> InstallablePackage<'gctx> {
         } else {
             ws.current()?.clone()
         };
+
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        let pkg = ws.current()?.clone();
 
         // When we build this package, we want to build the *specified* package only,
         // and avoid building e.g. workspace default-members instead. Do so by constructing
@@ -817,6 +830,7 @@ fn make_ws_rustc_target<'gctx>(
     source_id: &SourceId,
     pkg: Package,
 ) -> CargoResult<(Workspace<'gctx>, Rustc, String)> {
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     let mut ws = if source_id.is_git() || source_id.is_path() {
         Workspace::new(pkg.manifest_path(), gctx)?
     } else {
@@ -824,6 +838,16 @@ fn make_ws_rustc_target<'gctx>(
         ws.set_resolve_honors_rust_version(Some(false));
         ws
     };
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    let mut ws = if source_id.is_path() {
+        Workspace::new(pkg.manifest_path(), gctx)?
+    } else {
+        let mut ws = Workspace::ephemeral(pkg, gctx, None, false)?;
+        ws.set_resolve_honors_rust_version(Some(false));
+        ws
+    };
+
     ws.set_ignore_lock(gctx.lock_update_allowed());
     ws.set_require_optional_deps(false);
 

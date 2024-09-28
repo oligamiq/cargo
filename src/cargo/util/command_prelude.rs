@@ -854,6 +854,7 @@ Run `{cmd}` to see possible targets."
 
     fn new_options(&self, gctx: &GlobalContext) -> CargoResult<NewOptions> {
         let vcs = self._value_of("vcs").map(|vcs| match vcs {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             "git" => VersionControl::Git,
             "hg" => VersionControl::Hg,
             "pijul" => VersionControl::Pijul,

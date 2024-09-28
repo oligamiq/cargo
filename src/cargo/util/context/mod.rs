@@ -75,7 +75,9 @@ use crate::ops::RegistryCredentialConfig;
 use crate::sources::CRATES_IO_INDEX;
 use crate::sources::CRATES_IO_REGISTRY;
 use crate::util::errors::CargoResult;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use crate::util::network::http::configure_http_handle;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use crate::util::network::http::http_handle;
 use crate::util::try_canonicalize;
 use crate::util::{internal, CanonicalUrl};
@@ -84,6 +86,7 @@ use anyhow::{anyhow, bail, format_err, Context as _};
 use cargo_credential::Secret;
 use cargo_util::paths;
 use cargo_util_schemas::manifest::RegistryName;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::Easy;
 use lazycell::LazyCell;
 use serde::de::IntoDeserializer as _;
@@ -199,6 +202,7 @@ pub struct GlobalContext {
     /// Cli flags of the form "-Z something"
     unstable_flags_cli: Option<Vec<String>>,
     /// A handle on curl easy mode for http calls
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     easy: LazyCell<RefCell<Easy>>,
     /// Cache of the `SourceId` for crates.io
     crates_io_source_id: LazyCell<SourceId>,
@@ -304,6 +308,7 @@ impl GlobalContext {
             },
             unstable_flags: CliUnstable::default(),
             unstable_flags_cli: None,
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             easy: LazyCell::new(),
             crates_io_source_id: LazyCell::new(),
             cache_rustc_info,
@@ -1787,6 +1792,7 @@ impl GlobalContext {
         self.jobserver.as_ref()
     }
 
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn http(&self) -> CargoResult<&RefCell<Easy>> {
         let http = self
             .easy
@@ -1803,7 +1809,9 @@ impl GlobalContext {
     pub fn http_config(&self) -> CargoResult<&CargoHttpConfig> {
         self.http_config.try_borrow_with(|| {
             let mut http = self.get::<CargoHttpConfig>("http")?;
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             let curl_v = curl::Version::get();
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             disables_multiplexing_for_bad_curl(curl_v.version(), &mut http, self);
             Ok(http)
         })

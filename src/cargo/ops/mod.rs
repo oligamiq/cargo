@@ -10,7 +10,10 @@ pub use self::cargo_fetch::{fetch, FetchOptions};
 pub use self::cargo_install::{install, install_list};
 pub use self::cargo_new::{init, new, NewOptions, NewProjectKind, VersionControl};
 pub use self::cargo_output_metadata::{output_metadata, ExportInfo, OutputMetadataOptions};
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub use self::cargo_package::{check_yanked, package, PackageOpts};
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub use self::cargo_package::{check_yanked, PackageOpts};
 pub use self::cargo_pkgid::pkgid;
 pub use self::cargo_read_manifest::read_package;
 pub use self::cargo_run::run;
@@ -71,10 +74,18 @@ mod vendor;
 /// Error if a git/path dep is transitive, but has no version (registry source).
 /// This check is performed on dependencies before publishing or packaging
 fn check_dep_has_version(dep: &crate::core::Dependency, publish: bool) -> crate::CargoResult<bool> {
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     let which = if dep.source_id().is_path() {
         "path"
     } else if dep.source_id().is_git() {
         "git"
+    } else {
+        return Ok(false);
+    };
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    let which = if dep.source_id().is_path() {
+        "path"
     } else {
         return Ok(false);
     };

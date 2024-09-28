@@ -181,6 +181,15 @@ pub fn exit_status_to_string(status: ExitStatus) -> String {
         base.push_str(extra);
         base
     }
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    fn status_to_string(status: ExitStatus) -> String {
+        if status.success() {
+            return "success".to_string();
+        } else {
+            return format!("exit code: {}", status.code().unwrap());
+        }
+    }
 }
 
 /// Returns `true` if the given process exit code is something a normal

@@ -28,6 +28,7 @@
 
 pub use self::config::SourceConfigMap;
 pub use self::directory::DirectorySource;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub use self::git::GitSource;
 pub use self::path::PathSource;
 pub use self::path::RecursivePathSource;
@@ -38,6 +39,7 @@ pub use self::replaced::ReplacedSource;
 
 pub mod config;
 pub mod directory;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub mod git;
 pub mod overlay;
 pub mod path;

@@ -213,6 +213,7 @@ impl InstallTracker {
                     .installs
                     .get(dupe_pkg_id)
                     .expect("dupes must be in sync");
+                #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
                 let precise_equal = if source_id.is_git() {
                     // Git sources must have the exact same hash to be
                     // considered "fresh".
@@ -220,6 +221,8 @@ impl InstallTracker {
                 } else {
                     true
                 };
+                #[cfg(all(target_os = "wasi", target_env = "p1"))]
+                let precise_equal = true;
 
                 dupe_pkg_id.version() == pkg.version()
                     && dupe_pkg_id.source_id() == source_id

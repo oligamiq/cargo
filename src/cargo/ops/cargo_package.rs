@@ -154,6 +154,7 @@ fn create_package(
 ///
 /// Returns the generated package files. If `opts.list` is true, skips
 /// generating package files and returns an empty list.
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub fn package(ws: &Workspace<'_>, opts: &PackageOpts<'_>) -> CargoResult<Vec<FileLock>> {
     let specs = &opts.to_package.to_package_id_specs(ws)?;
     // If -p is used, we should check spec is matched with the members (See #13719)
@@ -180,6 +181,7 @@ pub fn package(ws: &Workspace<'_>, opts: &PackageOpts<'_>) -> CargoResult<Vec<Fi
 /// Returns the generated package files and the dependencies between them. If
 /// `opts.list` is true, skips generating package files and returns an empty
 /// list.
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub(crate) fn package_with_dep_graph(
     ws: &Workspace<'_>,
     opts: &PackageOpts<'_>,
@@ -192,6 +194,7 @@ pub(crate) fn package_with_dep_graph(
     )))
 }
 
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn do_package<'a>(
     ws: &Workspace<'_>,
     opts: &PackageOpts<'a>,
@@ -372,6 +375,7 @@ fn local_deps<T>(packages: impl Iterator<Item = (Package, T)>) -> LocalDependenc
 }
 
 /// Performs pre-archiving checks and builds a list of files to archive.
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn prepare_archive(
     ws: &Workspace<'_>,
     pkg: &Package,
@@ -731,6 +735,7 @@ fn check_metadata(pkg: &Package, gctx: &GlobalContext) -> CargoResult<()> {
 /// has not been passed, then `bail!` with an informative message. Otherwise
 /// return the sha1 hash of the current *HEAD* commit, or `None` if no repo is
 /// found.
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn check_repo_state(
     p: &Package,
     src_files: &[PathBuf],

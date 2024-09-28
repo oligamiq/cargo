@@ -6,14 +6,21 @@ pub fn stdin_stdout_to_console<F, T>(f: F) -> Result<T, Error>
 where
     F: FnOnce() -> T,
 {
-    let open_write = |f| std::fs::OpenOptions::new().write(true).open(f);
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+    {
+        let open_write = |f| std::fs::OpenOptions::new().write(true).open(f);
 
-    let mut stdin = File::open(imp::IN_DEVICE).or_else(|_| File::open(imp::NULL_DEVICE))?;
-    let mut stdout = open_write(imp::OUT_DEVICE).or_else(|_| open_write(imp::NULL_DEVICE))?;
+        let mut stdin = File::open(imp::IN_DEVICE).or_else(|_| File::open(imp::NULL_DEVICE))?;
+        let mut stdout = open_write(imp::OUT_DEVICE).or_else(|_| open_write(imp::NULL_DEVICE))?;
 
-    let _stdin_guard = imp::ReplacementGuard::new(Stdio::Stdin, &mut stdin)?;
-    let _stdout_guard = imp::ReplacementGuard::new(Stdio::Stdout, &mut stdout)?;
-    Ok(f())
+        let _stdin_guard = imp::ReplacementGuard::new(Stdio::Stdin, &mut stdin)?;
+        let _stdout_guard = imp::ReplacementGuard::new(Stdio::Stdout, &mut stdout)?;
+        return Ok(f());
+    }
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        return Ok(f());
+    }
 }
 
 enum Stdio {

@@ -91,6 +91,7 @@ pub fn main(gctx: &mut GlobalContext) -> CliResult {
             global_args,
             Some(&exec),
         )?;
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         super::init_git(gctx);
 
         exec.exec(gctx, subcommand_args)?;
@@ -211,14 +212,18 @@ pub fn get_version_string(is_verbose: bool) -> String {
             version_string.push_str(&format!("commit-date: {}\n", ci.commit_date));
         }
         writeln!(version_string, "host: {}", env!("RUST_HOST_TARGET")).unwrap();
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         add_libgit2(&mut version_string);
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         add_curl(&mut version_string);
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         add_ssl(&mut version_string);
         writeln!(version_string, "os: {}", os_info::get()).unwrap();
     }
     version_string
 }
 
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn add_libgit2(version_string: &mut String) {
     let git2_v = git2::Version::get();
     let lib_v = git2_v.libgit2_version();
@@ -239,6 +244,7 @@ fn add_libgit2(version_string: &mut String) {
     .unwrap();
 }
 
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 fn add_curl(version_string: &mut String) {
     let curl_v = curl::Version::get();
     let vendored = if curl_v.vendored() {
@@ -309,6 +315,15 @@ To pass the arguments to the subcommand, remove `--`",
                 }
             }
             (None, Ok(None)) => {}
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            (None, Ok(Some(_))) => {
+                // User alias conflicts with an external subcommand
+                gctx.shell().warn(format!(
+                    "user-defined alias `{}` is ignored, because it is not supported on this platform",
+                    cmd,
+                ))?;
+            }
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             (None, Ok(Some(alias))) => {
                 // Check if a user-defined alias is shadowing an external subcommand
                 // (binary of the form `cargo-<subcommand>`)
@@ -472,6 +487,7 @@ impl Exec {
     fn exec(self, gctx: &mut GlobalContext, subcommand_args: &ArgMatches) -> CliResult {
         match self {
             Self::Builtin(exec) => exec(gctx, subcommand_args),
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             Self::Manifest(cmd) => {
                 let ext_path = super::find_external_subcommand(gctx, &cmd);
                 if !gctx.cli_unstable().script && ext_path.is_some() {
@@ -491,6 +507,11 @@ For more information, see issue #12207 <https://github.com/rust-lang/cargo/issue
                     commands::run::exec_manifest_command(gctx, &cmd, &ext_args)
                 }
             }
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            Self::Manifest(_) => {
+                Err(anyhow::format_err!("`external subcommand` is not supported on this platform").into())
+            }
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             Self::External(cmd) => {
                 let mut ext_args = vec![OsStr::new(&cmd)];
                 ext_args.extend(
@@ -500,6 +521,10 @@ For more information, see issue #12207 <https://github.com/rust-lang/cargo/issue
                         .map(OsString::as_os_str),
                 );
                 super::execute_external_subcommand(gctx, &cmd, &ext_args)
+            }
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            Self::External(_) => {
+                Err(anyhow::format_err!("`external subcommand` is not supported on this platform").into())
             }
         }
     }

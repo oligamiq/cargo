@@ -808,6 +808,7 @@ pub fn encodable_package_id(
     let mut version = Some(id.version().to_string());
     let mut id_to_encode = id.source_id();
     if resolve_version <= ResolveVersion::V2 {
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         if let Some(GitReference::Branch(b)) = id_to_encode.git_reference() {
             if b == "master" {
                 id_to_encode =

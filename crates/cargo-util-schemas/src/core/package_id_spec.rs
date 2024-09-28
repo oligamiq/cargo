@@ -109,6 +109,7 @@ impl PackageIdSpec {
         let mut kind = None;
         if let Some((kind_str, scheme)) = url.scheme().split_once('+') {
             match kind_str {
+                #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
                 "git" => {
                     let git_ref = GitReference::from_query(url.query_pairs());
                     url.set_query(None);
@@ -236,6 +237,7 @@ impl fmt::Display for PackageIdSpec {
                     write!(f, "{protocol}+")?;
                 }
                 write!(f, "{}", url)?;
+                #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
                 if let Some(SourceKind::Git(git_ref)) = self.kind.as_ref() {
                     if let Some(pretty) = git_ref.pretty_ref(true) {
                         write!(f, "?{}", pretty)?;

@@ -8,6 +8,7 @@ use crate::sources::registry::{LoadResponse, RegistryConfig, RegistryData};
 use crate::util::cache_lock::CacheLockMode;
 use crate::util::errors::{CargoResult, HttpNotSuccessful};
 use crate::util::interning::InternedString;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use crate::util::network::http::http_handle;
 use crate::util::network::retry::{Retry, RetryResult};
 use crate::util::network::sleep::SleepTracker;
@@ -15,7 +16,9 @@ use crate::util::{auth, Filesystem, GlobalContext, IntoUrl, Progress, ProgressSt
 use anyhow::Context as _;
 use cargo_credential::Operation;
 use cargo_util::paths;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::easy::{Easy, List};
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use curl::multi::{EasyHandle, Multi};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -73,6 +76,7 @@ pub struct HttpRegistry<'gctx> {
     url: Url,
 
     /// HTTP multi-handle for asynchronous/parallel requests.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     multi: Multi,
 
     /// Has the client requested a cache update?
@@ -115,12 +119,18 @@ struct Downloads<'gctx> {
     /// When a download is started, it is added to this map. The key is a
     /// "token" (see [`Download::token`]). It is removed once the download is
     /// finished.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pending: HashMap<usize, (Download<'gctx>, EasyHandle)>,
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    pending: HashMap<usize, (Download<'gctx>, ())>,
     /// Set of paths currently being downloaded.
     /// This should stay in sync with the `pending` field.
     pending_paths: HashSet<PathBuf>,
     /// Downloads that have failed and are waiting to retry again later.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     sleeping: SleepTracker<(Download<'gctx>, Easy)>,
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    sleeping: SleepTracker<(Download<'gctx>, ())>,
     /// The final result of each download.
     results: HashMap<PathBuf, CargoResult<CompletedDownload>>,
     /// The next ID to use for creating a token (see [`Download::token`]).
@@ -210,6 +220,7 @@ impl<'gctx> HttpRegistry<'gctx> {
             source_id,
             gctx,
             url,
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             multi: Multi::new(),
             multiplexing: false,
             downloads: Downloads {
@@ -264,14 +275,28 @@ impl<'gctx> HttpRegistry<'gctx> {
 
         // We've enabled the `http2` feature of `curl` in Cargo, so treat
         // failures here as fatal as it would indicate a build-time problem.
-        self.multiplexing = self.gctx.http_config()?.multiplexing.unwrap_or(true);
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            self.multiplexing = self.gctx.http_config()?.multiplexing.unwrap_or(true);
+        }
 
-        self.multi
-            .pipelining(false, self.multiplexing)
-            .context("failed to enable multiplexing/pipelining in curl")?;
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            self.multiplexing = false;
+        }
+
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            self.multi
+                .pipelining(false, self.multiplexing)
+                .context("failed to enable multiplexing/pipelining in curl")?;
+        }
 
         // let's not flood the server with connections
-        self.multi.set_max_host_connections(2)?;
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            self.multi.set_max_host_connections(2)?;
+        }
 
         if !self.quiet {
             self.gctx
@@ -284,6 +309,7 @@ impl<'gctx> HttpRegistry<'gctx> {
 
     /// Checks the results inside the [`HttpRegistry::multi`] handle, and
     /// updates relevant state in [`HttpRegistry::downloads`] accordingly.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     fn handle_completed_downloads(&mut self) -> CargoResult<()> {
         assert_eq!(
             self.downloads.pending.len(),
@@ -447,11 +473,16 @@ impl<'gctx> HttpRegistry<'gctx> {
     /// Moves failed [`Download`]s that are ready to retry to the pending queue.
     fn add_sleepers(&mut self) -> CargoResult<()> {
         for (dl, handle) in self.downloads.sleeping.to_retry() {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             let mut handle = self.multi.add(handle)?;
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             handle.set_token(dl.token)?;
             let is_new = self.downloads.pending_paths.insert(dl.path.to_path_buf());
             assert!(is_new, "path queued for download more than once");
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             let previous = self.downloads.pending.insert(dl.token, (dl, handle));
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            let previous = self.downloads.pending.insert(dl.token, (dl, ()));
             assert!(previous.is_none(), "dl token queued more than once");
         }
         Ok(())
@@ -626,109 +657,194 @@ impl<'gctx> RegistryData for HttpRegistry<'gctx> {
         // Looks like we're going to have to do a network request.
         self.start_fetch()?;
 
-        let mut handle = http_handle(self.gctx)?;
         let full_url = self.full_url(path);
         debug!(target: "network", "fetch {}", full_url);
-        handle.get(true)?;
-        handle.url(&full_url)?;
-        handle.follow_location(true)?;
 
-        // Enable HTTP/2 if possible.
-        crate::try_old_curl_http2_pipewait!(self.multiplexing, handle);
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            let mut handle = http_handle(self.gctx)?;
+            handle.get(true)?;
+            handle.url(&full_url)?;
+            handle.follow_location(true)?;
 
-        let mut headers = List::new();
-        // Include a header to identify the protocol. This allows the server to
-        // know that Cargo is attempting to use the sparse protocol.
-        headers.append("cargo-protocol: version=1")?;
-        headers.append("accept: text/plain")?;
+            // Enable HTTP/2 if possible.
+            crate::try_old_curl_http2_pipewait!(self.multiplexing, handle);
 
-        // If we have a cached copy of the file, include IF_NONE_MATCH or IF_MODIFIED_SINCE header.
-        if let Some(index_version) = index_version {
-            if let Some((key, value)) = index_version.split_once(':') {
-                match key {
-                    ETAG => headers.append(&format!("{}: {}", IF_NONE_MATCH, value.trim()))?,
-                    LAST_MODIFIED => {
-                        headers.append(&format!("{}: {}", IF_MODIFIED_SINCE, value.trim()))?
+            let mut headers = List::new();
+            // Include a header to identify the protocol. This allows the server to
+            // know that Cargo is attempting to use the sparse protocol.
+            headers.append("cargo-protocol: version=1")?;
+            headers.append("accept: text/plain")?;
+
+            // If we have a cached copy of the file, include IF_NONE_MATCH or IF_MODIFIED_SINCE header.
+            if let Some(index_version) = index_version {
+                if let Some((key, value)) = index_version.split_once(':') {
+                    match key {
+                        ETAG => headers.append(&format!("{}: {}", IF_NONE_MATCH, value.trim()))?,
+                        LAST_MODIFIED => {
+                            headers.append(&format!("{}: {}", IF_MODIFIED_SINCE, value.trim()))?
+                        }
+                        _ => debug!("unexpected index version: {}", index_version),
                     }
-                    _ => debug!("unexpected index version: {}", index_version),
                 }
             }
-        }
-        if self.auth_required {
-            let authorization = auth::auth_token(
-                self.gctx,
-                &self.source_id,
-                self.login_url.as_ref(),
-                Operation::Read,
-                self.auth_error_headers.clone(),
-                true,
-            )?;
-            headers.append(&format!("Authorization: {}", authorization))?;
-            trace!(target: "network", "including authorization for {}", full_url);
-        }
-        handle.http_headers(headers)?;
+            if self.auth_required {
+                let authorization = auth::auth_token(
+                    self.gctx,
+                    &self.source_id,
+                    self.login_url.as_ref(),
+                    Operation::Read,
+                    self.auth_error_headers.clone(),
+                    true,
+                )?;
+                headers.append(&format!("Authorization: {}", authorization))?;
+                trace!(target: "network", "including authorization for {}", full_url);
+            }
+            handle.http_headers(headers)?;
 
-        // We're going to have a bunch of downloads all happening "at the same time".
-        // So, we need some way to track what headers/data/responses are for which request.
-        // We do that through this token. Each request (and associated response) gets one.
-        let token = self.downloads.next;
-        self.downloads.next += 1;
-        debug!(target: "network", "downloading {} as {}", path.display(), token);
-        let is_new = self.downloads.pending_paths.insert(path.to_path_buf());
-        assert!(is_new, "path queued for download more than once");
+            // We're going to have a bunch of downloads all happening "at the same time".
+            // So, we need some way to track what headers/data/responses are for which request.
+            // We do that through this token. Each request (and associated response) gets one.
+            let token = self.downloads.next;
+            self.downloads.next += 1;
+            debug!(target: "network", "downloading {} as {}", path.display(), token);
+            let is_new = self.downloads.pending_paths.insert(path.to_path_buf());
+            assert!(is_new, "path queued for download more than once");
 
-        // Each write should go to self.downloads.pending[&token].data.
-        // Since the write function must be 'static, we access downloads through a thread-local.
-        // That thread-local is set up in `block_until_ready` when it calls self.multi.perform,
-        // which is what ultimately calls this method.
-        handle.write_function(move |buf| {
-            trace!(target: "network", "{} - {} bytes of data", token, buf.len());
-            tls::with(|downloads| {
-                if let Some(downloads) = downloads {
-                    downloads.pending[&token]
-                        .0
-                        .data
-                        .borrow_mut()
-                        .extend_from_slice(buf);
-                }
-            });
-            Ok(buf.len())
-        })?;
-
-        // And ditto for the header function.
-        handle.header_function(move |buf| {
-            if let Some((tag, value)) = Self::handle_http_header(buf) {
+            // Each write should go to self.downloads.pending[&token].data.
+            // Since the write function must be 'static, we access downloads through a thread-local.
+            // That thread-local is set up in `block_until_ready` when it calls self.multi.perform,
+            // which is what ultimately calls this method.
+            handle.write_function(move |buf| {
+                trace!(target: "network", "{} - {} bytes of data", token, buf.len());
                 tls::with(|downloads| {
                     if let Some(downloads) = downloads {
-                        let mut header_map = downloads.pending[&token].0.header_map.borrow_mut();
-                        header_map.all.push(format!("{tag}: {value}"));
-                        match tag.to_ascii_lowercase().as_str() {
-                            LAST_MODIFIED => header_map.last_modified = Some(value.to_string()),
-                            ETAG => header_map.etag = Some(value.to_string()),
-                            WWW_AUTHENTICATE => header_map.www_authenticate.push(value.to_string()),
-                            _ => {}
-                        }
+                        downloads.pending[&token]
+                            .0
+                            .data
+                            .borrow_mut()
+                            .extend_from_slice(buf);
                     }
                 });
+                Ok(buf.len())
+            })?;
+
+            // And ditto for the header function.
+            handle.header_function(move |buf| {
+                if let Some((tag, value)) = Self::handle_http_header(buf) {
+                    tls::with(|downloads| {
+                        if let Some(downloads) = downloads {
+                            let mut header_map = downloads.pending[&token].0.header_map.borrow_mut();
+                            header_map.all.push(format!("{tag}: {value}"));
+                            match tag.to_ascii_lowercase().as_str() {
+                                LAST_MODIFIED => header_map.last_modified = Some(value.to_string()),
+                                ETAG => header_map.etag = Some(value.to_string()),
+                                WWW_AUTHENTICATE => header_map.www_authenticate.push(value.to_string()),
+                                _ => {}
+                            }
+                        }
+                    });
+                }
+
+                true
+            })?;
+
+            let dl = Download {
+                token,
+                path: path.to_path_buf(),
+                data: RefCell::new(Vec::new()),
+                header_map: Default::default(),
+                retry: Retry::new(self.gctx)?,
+            };
+
+            // Finally add the request we've lined up to the pool of requests that cURL manages.
+            let mut handle = self.multi.add(handle)?;
+            handle.set_token(token)?;
+            self.downloads.pending.insert(dl.token, (dl, handle));
+
+            return Poll::Pending;
+        }
+
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            // handle.get(true)?;
+            // handle.url(&full_url)?;
+
+            let mut headers = vec![];
+            // Include a header to identify the protocol. This allows the server to
+            // know that Cargo is attempting to use the sparse protocol.
+            headers.push((String::from("cargo-protocol"), String::from("version=1")));
+            headers.push((String::from("accept"), String::from("text/plain")));
+
+            // If we have a cached copy of the file, include IF_NONE_MATCH or IF_MODIFIED_SINCE header.
+            if let Some(index_version) = index_version {
+                if let Some((key, value)) = index_version.split_once(':') {
+                    match key {
+                        ETAG => headers.push((String::from(IF_NONE_MATCH), String::from(value.trim()))),
+                        LAST_MODIFIED => {
+                            headers.push((String::from(IF_MODIFIED_SINCE), String::from(value.trim())));
+                        }
+                        _ => debug!("unexpected index version: {}", index_version),
+                    }
+                }
+            }
+            if self.auth_required {
+                let authorization = auth::auth_token(
+                    self.gctx,
+                    &self.source_id,
+                    self.login_url.as_ref(),
+                    Operation::Read,
+                    self.auth_error_headers.clone(),
+                    true,
+                )?;
+                headers.push((String::from("Authorization"), authorization));
+                trace!(target: "network", "including authorization for {}", full_url);
             }
 
-            true
-        })?;
+            // We're going to have a bunch of downloads all happening "at the same time".
+            // So, we need some way to track what headers/data/responses are for which request.
+            // We do that through this token. Each request (and associated response) gets one.
+            let token = self.downloads.next;
+            self.downloads.next += 1;
+            debug!(target: "network", "downloading {} as {}", path.display(), token);
+            let is_new = self.downloads.pending_paths.insert(path.to_path_buf());
+            assert!(is_new, "path queued for download more than once");
 
-        let dl = Download {
-            token,
-            path: path.to_path_buf(),
-            data: RefCell::new(Vec::new()),
-            header_map: Default::default(),
-            retry: Retry::new(self.gctx)?,
-        };
+            let response = fetch::fetch(full_url, "GET", headers, vec![])?;
 
-        // Finally add the request we've lined up to the pool of requests that cURL manages.
-        let mut handle = self.multi.add(handle)?;
-        handle.set_token(token)?;
-        self.downloads.pending.insert(dl.token, (dl, handle));
+            // Each write should go to self.downloads.pending[&token].data.
+            // Since the write function must be 'static, we access downloads through a thread-local.
+            // That thread-local is set up in `block_until_ready` when it calls self.multi.perform,
+            // which is what ultimately calls this method.
+            trace!(target: "network", "{} - {} bytes of data", token, response.body.len());
+            self.downloads.pending[&token]
+                .0
+                .data
+                .borrow_mut()
+                .extend_from_slice(&response.body);
 
-        Poll::Pending
+            // And ditto for the header function.
+            let mut header_map = self.downloads.pending[&token].0.header_map.borrow_mut();
+            for (tag, value) in response.headers {
+                header_map.all.push(format!("{tag}: {value}"));
+                match tag.to_ascii_lowercase().as_str() {
+                    LAST_MODIFIED => header_map.last_modified = Some(value.to_string()),
+                    ETAG => header_map.etag = Some(value.to_string()),
+                    WWW_AUTHENTICATE => header_map.www_authenticate.push(value.to_string()),
+                    _ => {}
+                }
+            }
+
+            let dl = Download {
+                token,
+                path: path.to_path_buf(),
+                data: RefCell::new(Vec::new()),
+                header_map: Default::default(),
+                retry: Retry::new(self.gctx)?,
+            };
+
+            return Poll::Pending;
+        }
     }
 
     fn config(&mut self) -> Poll<CargoResult<Option<RegistryConfig>>> {
@@ -788,6 +904,7 @@ impl<'gctx> RegistryData for HttpRegistry<'gctx> {
         download::is_crate_downloaded(&self.cache_path, &self.gctx, pkg)
     }
 
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     fn block_until_ready(&mut self) -> CargoResult<()> {
         trace!(target: "network",
             "block_until_ready: {} transfers pending",
@@ -826,6 +943,11 @@ impl<'gctx> RegistryData for HttpRegistry<'gctx> {
                     .context("failed to wait on curl `Multi`")?;
             }
         }
+    }
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    fn block_until_ready(&mut self) -> CargoResult<()> {
+        return Ok(());
     }
 }
 

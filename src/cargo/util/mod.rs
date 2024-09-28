@@ -22,7 +22,10 @@ pub use self::progress::{Progress, ProgressStyle};
 pub use self::queue::Queue;
 pub use self::rustc::Rustc;
 pub use self::semver_ext::{OptVersionReq, VersionExt};
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub use self::vcs::{existing_vcs_repo, FossilRepo, GitRepo, HgRepo, PijulRepo};
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub use self::vcs::{existing_vcs_repo, FossilRepo, HgRepo, PijulRepo};
 pub use self::workspace::{
     add_path_args, path_args, print_available_benches, print_available_binaries,
     print_available_examples, print_available_packages, print_available_tests,

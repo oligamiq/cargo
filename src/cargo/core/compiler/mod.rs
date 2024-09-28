@@ -1322,6 +1322,7 @@ fn package_remap(build_runner: &BuildRunner<'_, '_>, unit: &Unit) -> OsString {
     let ws_root = build_runner.bcx.ws.root();
     let mut remap = OsString::from("--remap-path-prefix=");
     let source_id = unit.pkg.package_id().source_id();
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     if source_id.is_git() {
         remap.push(
             build_runner
@@ -1350,6 +1351,28 @@ fn package_remap(build_runner: &BuildRunner<'_, '_>, unit: &Unit) -> OsString {
         remap.push("-");
         remap.push(unit.pkg.version().to_string());
     }
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    if source_id.is_registry() {
+        remap.push(
+            build_runner
+                .bcx
+                .gctx
+                .registry_source_path()
+                .as_path_unlocked(),
+        );
+        remap.push("=");
+    } else if pkg_root.strip_prefix(ws_root).is_ok() {
+        remap.push(ws_root);
+        remap.push("=."); // remap to relative rustc work dir explicitly
+    } else {
+        remap.push(pkg_root);
+        remap.push("=");
+        remap.push(unit.pkg.name());
+        remap.push("-");
+        remap.push(unit.pkg.version().to_string());
+    }
+
     remap
 }
 

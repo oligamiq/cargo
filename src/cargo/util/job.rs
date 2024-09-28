@@ -147,3 +147,15 @@ mod imp {
         }
     }
 }
+
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+mod imp {
+    pub type Setup = ();
+
+    pub unsafe fn setup() -> Option<()> {
+        #[cfg(all(target_os = "wasi", target_env = "p1", target_feature = "atomics"))]
+        return Some(());
+
+        None
+    }
+}

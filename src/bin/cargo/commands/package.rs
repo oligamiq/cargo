@@ -44,49 +44,55 @@ pub fn cli() -> Command {
 }
 
 pub fn exec(gctx: &mut GlobalContext, args: &ArgMatches) -> CliResult {
-    if args._value_of("registry").is_some() {
-        gctx.cli_unstable().fail_if_stable_opt_custom_z(
-            "--registry",
-            13947,
-            "package-workspace",
-            gctx.cli_unstable().package_workspace,
-        )?;
-    }
-    if args._value_of("index").is_some() {
-        gctx.cli_unstable().fail_if_stable_opt_custom_z(
-            "--index",
-            13947,
-            "package-workspace",
-            gctx.cli_unstable().package_workspace,
-        )?;
-    }
-    let reg_or_index = args.registry_or_index(gctx)?;
-    let ws = args.workspace(gctx)?;
-    if ws.root_maybe().is_embedded() {
-        return Err(anyhow::format_err!(
-            "{} is unsupported by `cargo package`",
-            ws.root_manifest().display()
-        )
-        .into());
-    }
-    let specs = args.packages_from_flags()?;
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    return Err(anyhow::format_err!("`cargo package` is not supported on this platform").into());
 
-    ops::package(
-        &ws,
-        &PackageOpts {
-            gctx,
-            verify: !args.flag("no-verify"),
-            list: args.flag("list"),
-            check_metadata: !args.flag("no-metadata"),
-            allow_dirty: args.flag("allow-dirty"),
-            to_package: specs,
-            targets: args.targets()?,
-            jobs: args.jobs()?,
-            keep_going: args.keep_going(),
-            cli_features: args.cli_features()?,
-            reg_or_index,
-        },
-    )?;
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+    {
+        if args._value_of("registry").is_some() {
+            gctx.cli_unstable().fail_if_stable_opt_custom_z(
+                "--registry",
+                13947,
+                "package-workspace",
+                gctx.cli_unstable().package_workspace,
+            )?;
+        }
+        if args._value_of("index").is_some() {
+            gctx.cli_unstable().fail_if_stable_opt_custom_z(
+                "--index",
+                13947,
+                "package-workspace",
+                gctx.cli_unstable().package_workspace,
+            )?;
+        }
+        let reg_or_index = args.registry_or_index(gctx)?;
+        let ws = args.workspace(gctx)?;
+        if ws.root_maybe().is_embedded() {
+            return Err(anyhow::format_err!(
+                "{} is unsupported by `cargo package`",
+                ws.root_manifest().display()
+            )
+            .into());
+        }
+        let specs = args.packages_from_flags()?;
+
+        ops::package(
+            &ws,
+            &PackageOpts {
+                gctx,
+                verify: !args.flag("no-verify"),
+                list: args.flag("list"),
+                check_metadata: !args.flag("no-metadata"),
+                allow_dirty: args.flag("allow-dirty"),
+                to_package: specs,
+                targets: args.targets()?,
+                jobs: args.jobs()?,
+                keep_going: args.keep_going(),
+                cli_features: args.cli_features()?,
+                reg_or_index,
+            },
+        )?;
+    }
 
     Ok(())
 }

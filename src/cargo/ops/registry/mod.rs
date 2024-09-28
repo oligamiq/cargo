@@ -26,6 +26,7 @@ use crate::util::auth;
 use crate::util::cache_lock::CacheLockMode;
 use crate::util::context::{GlobalContext, PathAndArgs};
 use crate::util::errors::CargoResult;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use crate::util::network::http::http_handle;
 
 pub use self::info::info;
@@ -169,9 +170,13 @@ fn registry<'gctx>(
     } else {
         None
     };
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     let handle = http_handle(gctx)?;
     Ok((
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         Registry::new_handle(api_host, token, handle, cfg.auth_required),
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        Registry::new_handle(api_host, token, cfg.auth_required),
         src,
     ))
 }

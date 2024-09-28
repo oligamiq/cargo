@@ -70,6 +70,7 @@ macro_rules! try_old_curl {
 /// possible and multiplexing is possible. All in all this reduces the number
 /// of connections down to a more manageable state.
 #[macro_export]
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 macro_rules! try_old_curl_http2_pipewait {
     ($multiplexing:expr, $handle:expr) => {
         if $multiplexing {

@@ -282,6 +282,7 @@ restore the source replacement configuration to continue the build
             let path = directory.resolve_path(self.gctx);
             srcs.push(SourceId::for_directory(&path)?);
         }
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         if let Some(git) = def.git {
             let url = url(&git, &format!("source.{}.git", name))?;
             let reference = match def.branch {
@@ -312,6 +313,25 @@ restore the source replacement configuration to continue the build
             check_not_set("tag", def.tag)?;
             check_not_set("rev", def.rev)?;
         }
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            let check_not_set = |key, v: OptValue<String>| {
+                if let Some(val) = v {
+                    bail!(
+                        "source definition `source.{}` specifies `{}`, \
+                         but that requires a `git` key to be specified (in {})",
+                        name,
+                        key,
+                        val.definition
+                    );
+                }
+                Ok(())
+            };
+            check_not_set("branch", def.branch)?;
+            check_not_set("tag", def.tag)?;
+            check_not_set("rev", def.rev)?;
+        }
+
         if name == CRATES_IO_REGISTRY && srcs.is_empty() {
             srcs.push(SourceId::crates_io_maybe_sparse_http(self.gctx)?);
         }

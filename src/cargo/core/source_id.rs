@@ -4,7 +4,10 @@ use crate::core::SourceKind;
 use crate::sources::registry::CRATES_IO_HTTP_INDEX;
 use crate::sources::source::Source;
 use crate::sources::{DirectorySource, CRATES_IO_DOMAIN, CRATES_IO_INDEX, CRATES_IO_REGISTRY};
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use crate::sources::{GitSource, PathSource, RegistrySource};
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+use crate::sources::{PathSource, RegistrySource};
 use crate::util::interning::InternedString;
 use crate::util::{context, CanonicalUrl, CargoResult, GlobalContext, IntoUrl};
 use anyhow::Context as _;
@@ -156,6 +159,7 @@ impl SourceId {
             .ok_or_else(|| anyhow::format_err!("invalid source `{}`", string))?;
 
         match kind {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             "git" => {
                 let mut url = url.into_url()?;
                 let reference = GitReference::from_query(url.query_pairs());
@@ -205,6 +209,7 @@ impl SourceId {
     }
 
     /// Creates a `SourceId` from a Git reference.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn for_git(url: &Url, reference: GitReference) -> CargoResult<SourceId> {
         SourceId::new(SourceKind::Git(reference), url.clone(), None)
     }
@@ -372,6 +377,7 @@ impl SourceId {
     }
 
     /// Returns `true` if this source from a Git repository.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn is_git(self) -> bool {
         matches!(self.inner.kind, SourceKind::Git(_))
     }
@@ -386,6 +392,7 @@ impl SourceId {
     ) -> CargoResult<Box<dyn Source + 'a>> {
         trace!("loading SourceId; {}", self);
         match self.inner.kind {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             SourceKind::Git(..) => Ok(Box::new(GitSource::new(self, gctx)?)),
             SourceKind::Path => {
                 let path = self
@@ -423,6 +430,7 @@ impl SourceId {
     }
 
     /// Gets the Git reference if this is a git source, otherwise `None`.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn git_reference(self) -> Option<&'static GitReference> {
         match self.inner.kind {
             SourceKind::Git(ref s) => Some(s),
@@ -593,12 +601,16 @@ impl Ord for SourceId {
 
         // If the `kind` and the `url` are equal, then for git sources we also
         // ensure that the canonical urls are equal.
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         match (&self.inner.kind, &other.inner.kind) {
             (SourceKind::Git(_), SourceKind::Git(_)) => {
                 self.inner.canonical_url.cmp(&other.inner.canonical_url)
             }
             _ => self.inner.url.cmp(&other.inner.url),
         }
+
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        self.inner.url.cmp(&other.inner.url)
     }
 }
 
@@ -640,6 +652,7 @@ fn url_display(url: &Url) -> String {
 impl fmt::Display for SourceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.inner.kind {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             SourceKind::Git(ref reference) => {
                 // Don't replace the URL display for git references,
                 // because those are kind of expected to be URLs.
@@ -675,6 +688,7 @@ impl Hash for SourceId {
     fn hash<S: hash::Hasher>(&self, into: &mut S) {
         self.inner.kind.hash(into);
         match self.inner.kind {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             SourceKind::Git(_) => self.inner.canonical_url.hash(into),
             _ => self.inner.url.as_str().hash(into),
         }
@@ -717,11 +731,13 @@ impl<'a> fmt::Display for SourceIdAsUrl<'a> {
         }
         write!(f, "{}", self.inner.url)?;
         if let SourceIdInner {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             kind: SourceKind::Git(ref reference),
             ref precise,
             ..
         } = *self.inner
         {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             if let Some(pretty) = reference.pretty_ref(self.encoded) {
                 write!(f, "?{}", pretty)?;
             }

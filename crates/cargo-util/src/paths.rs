@@ -388,6 +388,11 @@ pub fn path2bytes(path: &Path) -> Result<&[u8]> {
             )),
         }
     }
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        use std::os::wasi::prelude::*;
+        Ok(path.as_os_str().as_bytes())
+    }
 }
 
 /// Converts UTF-8 bytes to a path.
@@ -404,6 +409,11 @@ pub fn bytes2path(bytes: &[u8]) -> Result<PathBuf> {
             Ok(s) => Ok(PathBuf::from(s)),
             Err(..) => Err(anyhow::format_err!("invalid non-unicode path")),
         }
+    }
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        use std::os::wasi::prelude::*;
+        Ok(PathBuf::from(OsStr::from_bytes(bytes)))
     }
 }
 
@@ -614,14 +624,19 @@ fn _link_or_copy(src: &Path, dst: &Path) -> Result<()> {
         // is only used for .dSYM directories on macos, but this shouldn't be
         // accidentally relied upon.
         use std::os::windows::fs::symlink_dir as symlink;
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        return Err(anyhow::format_err!("symlinks are not supported on WASI yet"));
 
-        let dst_dir = dst.parent().unwrap();
-        let src = if src.starts_with(dst_dir) {
-            src.strip_prefix(dst_dir).unwrap()
-        } else {
-            src
-        };
-        symlink(src, dst)
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            let dst_dir = dst.parent().unwrap();
+            let src = if src.starts_with(dst_dir) {
+                src.strip_prefix(dst_dir).unwrap()
+            } else {
+                src
+            };
+            symlink(src, dst)
+        }
     } else {
         if cfg!(target_os = "macos") {
             // There seems to be a race condition with APFS when hard-linking

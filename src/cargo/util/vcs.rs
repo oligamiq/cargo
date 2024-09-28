@@ -9,6 +9,7 @@ use std::path::Path;
 //    path in that repo.
 // 2. We are in an HG repo.
 pub fn existing_vcs_repo(path: &Path, cwd: &Path) -> bool {
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     fn in_git_repo(path: &Path, cwd: &Path) -> bool {
         if let Ok(repo) = GitRepo::discover(path, cwd) {
             // Don't check if the working directory itself is ignored.
@@ -22,14 +23,20 @@ pub fn existing_vcs_repo(path: &Path, cwd: &Path) -> bool {
         }
     }
 
-    in_git_repo(path, cwd) || HgRepo::discover(path, cwd).is_ok()
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+    return in_git_repo(path, cwd) || HgRepo::discover(path, cwd).is_ok();
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    HgRepo::discover(path, cwd).is_ok()
 }
 
 pub struct HgRepo;
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub struct GitRepo;
 pub struct PijulRepo;
 pub struct FossilRepo;
 
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 impl GitRepo {
     pub fn init(path: &Path, _: &Path) -> CargoResult<GitRepo> {
         git2::Repository::init(path)?;

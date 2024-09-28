@@ -129,6 +129,7 @@ fn sync(
                 }
                 continue;
             }
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             if pkg.source_id().is_git() {
                 continue;
             }
@@ -258,6 +259,7 @@ fn sync(
             source_id.without_precise().as_url().to_string()
         };
 
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         let source = if source_id.is_crates_io() {
             VendorSource::Registry {
                 registry: None,
@@ -291,6 +293,23 @@ fn sync(
         } else {
             panic!("Invalid source ID: {}", source_id)
         };
+
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        let source = if source_id.is_crates_io() {
+            VendorSource::Registry {
+                registry: None,
+                replace_with: merged_source_name.to_string(),
+            }
+        } else if source_id.is_remote_registry() {
+            let registry = source_id.url().to_string();
+            VendorSource::Registry {
+                registry: Some(registry),
+                replace_with: merged_source_name.to_string(),
+            }
+        } else {
+            panic!("Invalid source ID: {}", source_id)
+        };
+
         config.insert(name, source);
     }
 
@@ -360,6 +379,7 @@ fn cp_sources(
         // when published. This causes issue when the manifest is using workspace inheritance.
         // To get around this issue we use the "original" manifest after `{}.workspace = true`
         // has been resolved for git dependencies.
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         let cksum = if dst.file_name() == Some(OsStr::new("Cargo.toml"))
             && pkg.package_id().source_id().is_git()
         {
@@ -377,6 +397,26 @@ fn cp_sources(
                 tmp_buf,
             )?
         } else {
+            let mut src = File::open(&p).with_context(|| format!("failed to open {:?}", &p))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+                let src_metadata = src
+                    .metadata()
+                    .with_context(|| format!("failed to stat {:?}", p))?;
+                dst_opts.mode(src_metadata.mode());
+            }
+            copy_and_checksum(
+                &dst,
+                &mut dst_opts,
+                &mut src,
+                &p.display().to_string(),
+                tmp_buf,
+            )?
+        };
+
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        let cksum = {
             let mut src = File::open(&p).with_context(|| format!("failed to open {:?}", &p))?;
             #[cfg(unix)]
             {

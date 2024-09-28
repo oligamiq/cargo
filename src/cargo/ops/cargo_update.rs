@@ -1018,6 +1018,7 @@ impl std::fmt::Display for PackageChange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let package_id = self.package_id;
         if let Some(previous_id) = self.previous_id {
+            #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
             if package_id.source_id().is_git() {
                 write!(
                     f,
@@ -1027,6 +1028,8 @@ impl std::fmt::Display for PackageChange {
             } else {
                 write!(f, "{previous_id} -> v{}", package_id.version())
             }
+            #[cfg(all(target_os = "wasi", target_env = "p1"))]
+            write!(f, "{previous_id} -> v{}", package_id.version())
         } else {
             write!(f, "{package_id}")
         }
