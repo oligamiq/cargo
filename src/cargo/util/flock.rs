@@ -508,6 +508,8 @@ mod sys {
 
     #[cfg(not(target_os = "solaris"))]
     fn flock(file: &File, flag: libc::c_int) -> Result<()> {
+        use std::os::fd::AsRawFd as _;
+
         let ret = unsafe { libc::flock(file.as_raw_fd(), flag) };
         if ret < 0 {
             Err(Error::last_os_error())
