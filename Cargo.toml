@@ -114,7 +114,7 @@ walkdir = "2.5.0"
 windows-sys = "0.59"
 fetch = { version = "0.1.0", path = "crates/fetch" }
 rustc_driver = { path = "../../../compiler/rustc_driver" }
-rustc_driver_impl = { path = "../../../compiler/rustc_driver_impl", features = ["rustc_use_parallel_compiler"] }
+rustc_driver_impl = { path = "../../../compiler/rustc_driver_impl", features = ["rustc_use_parallel_compiler", "llvm"] }
 
 [patch.crates-io]
 libz-sys = { git = "https://github.com/oligamiq/libz-sys", default-features = false }

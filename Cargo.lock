@@ -3859,6 +3859,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_codegen_llvm"
+version = "0.0.0"
+dependencies = [
+ "bitflags 2.6.0",
+ "itertools 0.12.1",
+ "libc",
+ "measureme",
+ "object 0.36.4",
+ "rustc-demangle",
+ "rustc_ast",
+ "rustc_attr",
+ "rustc_codegen_ssa",
+ "rustc_data_structures",
+ "rustc_errors",
+ "rustc_fluent_macro",
+ "rustc_fs_util",
+ "rustc_hir",
+ "rustc_index",
+ "rustc_llvm",
+ "rustc_macros",
+ "rustc_metadata",
+ "rustc_middle",
+ "rustc_query_system",
+ "rustc_sanitizers",
+ "rustc_session",
+ "rustc_span",
+ "rustc_symbol_mangling",
+ "rustc_target",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "tracing",
+]
+
+[[package]]
 name = "rustc_codegen_ssa"
 version = "0.0.0"
 dependencies = [
@@ -4285,6 +4320,7 @@ dependencies = [
  "rustc_attr",
  "rustc_borrowck",
  "rustc_builtin_macros",
+ "rustc_codegen_llvm",
  "rustc_codegen_ssa",
  "rustc_const_eval",
  "rustc_data_structures",
@@ -4369,6 +4405,14 @@ dependencies = [
  "rustc_span",
  "rustc_target",
  "serde",
+]
+
+[[package]]
+name = "rustc_llvm"
+version = "0.0.0"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -4730,6 +4774,21 @@ dependencies = [
  "smallvec",
  "thin-vec",
  "tracing",
+]
+
+[[package]]
+name = "rustc_sanitizers"
+version = "0.0.0"
+dependencies = [
+ "bitflags 2.6.0",
+ "rustc_data_structures",
+ "rustc_hir",
+ "rustc_middle",
+ "rustc_span",
+ "rustc_target",
+ "rustc_trait_selection",
+ "tracing",
+ "twox-hash",
 ]
 
 [[package]]
@@ -5722,6 +5781,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
+ "rand",
  "static_assertions",
 ]
 
