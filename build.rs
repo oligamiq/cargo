@@ -12,6 +12,11 @@ fn main() {
     #[allow(clippy::disallowed_methods)]
     let target = std::env::var("TARGET").unwrap();
     println!("cargo:rustc-env=RUST_HOST_TARGET={target}");
+
+    if (target == "wasm32-wasip1-threads") {
+        let wasi_sysroot = std::env::var("WASI_SYSROOT").unwrap();
+        println!("cargo:rustc-flags=-L {}/../../lib/clang/18/lib/wasip1 -lstatic=clang_rt.builtins-wasm32", Path::new(&wasi_sysroot).display());
+    }
 }
 
 fn compress_man() {
