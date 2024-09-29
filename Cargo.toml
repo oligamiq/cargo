@@ -78,7 +78,7 @@ pkg-config = "0.3.30"
 proptest = "1.5.0"
 pulldown-cmark = { version = "0.11.0", default-features = false, features = ["html"] }
 rand = "0.8.5"
-regex = "1.10.5"
+regex = "1.10.0"
 # rusqlite = { version = "0.32.0", features = ["bundled"] }
 rusqlite = { git = "https://github.com/oligamiq/rusqlite", features = ["bundled"] }
 rustfix = { version = "0.8.2", path = "crates/rustfix" }
@@ -101,10 +101,10 @@ tempfile = "3.10.1"
 thiserror = "1.0.63"
 time = { version = "0.3.36", features = ["parsing", "formatting", "serde"] }
 toml = "0.8.19"
-toml_edit = { version = "0.22.20", features = ["serde"] }
-tracing = { version = "0.1.40", default-features = false, features = ["std"] } # be compatible with rustc_log: https://github.com/rust-lang/rust/blob/e51e98dde6a/compiler/rustc_log/Cargo.toml#L9
-tracing-chrome = "0.7.2"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+toml_edit = { version = "0.22.13", features = ["serde"] }
+tracing = { version = "0.1.0", default-features = false, features = ["std"] } # be compatible with rustc_log: https://github.com/rust-lang/rust/blob/e51e98dde6a/compiler/rustc_log/Cargo.toml#L9
+tracing-chrome = "0.7.0"
+tracing-subscriber = { version = "0.3.0", features = ["env-filter"] }
 unicase = "2.7.0"
 unicode-width = "0.1.13"
 unicode-xid = "0.2.4"
@@ -113,6 +113,8 @@ varisat = "0.2.2"
 walkdir = "2.5.0"
 windows-sys = "0.59"
 fetch = { version = "0.1.0", path = "crates/fetch" }
+rustc_driver = { path = "../../../compiler/rustc_driver" }
+rustc_driver_impl = { path = "../../../compiler/rustc_driver_impl", features = ["rustc_use_parallel_compiler"] }
 
 [patch.crates-io]
 libz-sys = { git = "https://github.com/oligamiq/libz-sys", default-features = false }
@@ -248,7 +250,8 @@ git2-curl.workspace = true
 
 [target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
 fetch.workspace = true
-# libc.workspace = true
+rustc_driver.workspace = true
+rustc_driver_impl.workspace = true
 
 [dev-dependencies]
 annotate-snippets = { workspace = true, features = ["testing-colors"] }

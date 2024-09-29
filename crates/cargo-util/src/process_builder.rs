@@ -226,6 +226,9 @@ impl ProcessBuilder {
 
     /// Like [`Command::status`] but with a better error message.
     pub fn status(&self) -> Result<ExitStatus> {
+        println!("called status");
+        println!("cmd: {:?}", self.build_command());
+
         self._status()
             .with_context(|| ProcessError::could_not_execute(self))
     }
@@ -288,32 +291,66 @@ impl ProcessBuilder {
 
     /// Like [`Command::output`] but with a better error message.
     pub fn output(&self) -> Result<Output> {
+        println!("called output");
+        println!("cmd: {:?}", self.build_command());
+
         self._output()
             .with_context(|| ProcessError::could_not_execute(self))
     }
 
     fn _output(&self) -> io::Result<Output> {
-        if !debug_force_argfile(self.retry_with_argfile) {
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            use rustc_driver::*;
+
             let mut cmd = self.build_command();
-            match piped(&mut cmd, self.stdin.is_some()).spawn() {
-                Err(ref e) if self.should_retry_with_argfile(e) => {}
-                Err(e) => return Err(e),
-                Ok(mut child) => {
-                    if let Some(stdin) = &self.stdin {
-                        child.stdin.take().unwrap().write_all(stdin)?;
+            let cmd_name = cmd.get_program().to_str().unwrap();
+            if cmd_name != "rustc" {
+                return piped(&mut cmd, self.stdin.is_some()).spawn()?.wait_with_output();
+            }
+
+            struct NoneCallbacks;
+            impl Callbacks for NoneCallbacks {}
+            let mut callbacks = NoneCallbacks;
+            let mut args = vec!["rustc".to_string()];
+            // let additional_args = std::env::var("RUSTFLAGS").unwrap_or_default();
+            // args.extend(additional_args.split_whitespace().map(|s| s.to_string()));
+            let ex_args = cmd.get_args().map(|arg| arg.to_str().unwrap().to_string()).collect::<Vec<_>>();
+            args.extend(ex_args);
+            println!("args: {:?}", args);
+            let rustc = RunCompiler::new(&args, &mut callbacks);
+            rustc.run().unwrap();
+            return Ok(Output {
+                status: ExitStatus::default(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            });
+        }
+
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            if !debug_force_argfile(self.retry_with_argfile) {
+                let mut cmd = self.build_command();
+                    match piped(&mut cmd, self.stdin.is_some()).spawn() {
+                    Err(ref e) if self.should_retry_with_argfile(e) => {}
+                    Err(e) => return Err(e),
+                    Ok(mut child) => {
+                        if let Some(stdin) = &self.stdin {
+                            child.stdin.take().unwrap().write_all(stdin)?;
+                        }
+                        return child.wait_with_output();
                     }
-                    return child.wait_with_output();
                 }
             }
+            let (mut cmd, argfile) = self.build_command_with_argfile()?;
+            let mut child = piped(&mut cmd, self.stdin.is_some()).spawn()?;
+            if let Some(stdin) = &self.stdin {
+                child.stdin.take().unwrap().write_all(stdin)?;
+            }
+            let output = child.wait_with_output();
+            close_tempfile_and_log_error(argfile);
+            return output;
         }
-        let (mut cmd, argfile) = self.build_command_with_argfile()?;
-        let mut child = piped(&mut cmd, self.stdin.is_some()).spawn()?;
-        if let Some(stdin) = &self.stdin {
-            child.stdin.take().unwrap().write_all(stdin)?;
-        }
-        let output = child.wait_with_output();
-        close_tempfile_and_log_error(argfile);
-        output
     }
 
     /// Executes the process, returning the stdio output, or an error if non-zero exit status.

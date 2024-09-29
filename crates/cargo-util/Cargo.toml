@@ -24,8 +24,12 @@ walkdir.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true
 
-[target.'cfg(any(unix, all(target_os = "wasi", target_env = "p1")))'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
+rustc_driver.workspace = true
+rustc_driver_impl.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 miow.workspace = true

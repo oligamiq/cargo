@@ -73,8 +73,7 @@ fn home_dir_inner() -> Option<PathBuf> {
 
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
 fn home_dir_inner() -> Option<PathBuf> {
-    #[allow(deprecated)]
-    std::env::home_dir()
+    std::env::var("HOME").map(PathBuf::from).ok()
 }
 
 /// Returns the storage directory used by Cargo, often knowns as
