@@ -180,6 +180,7 @@ impl ProcessBuilder {
     ///
     /// [jobserver_docs]: https://docs.rs/jobserver/latest/jobserver/
     pub fn inherit_jobserver(&mut self, jobserver: &Client) -> &mut Self {
+        tracing::debug!("inheriting jobserver");
         self.jobserver = Some(jobserver.clone());
         self
     }

@@ -15,6 +15,9 @@ rust-version = "1.63"
 [target.'cfg(any(unix, all(target_os = "wasi")))'.dependencies]
 libc = "0.2.159"
 
+[target.'cfg(all(target_os = "wasi"))'.dependencies]
+rand.workspace = true
+
 [target.'cfg(unix)'.dev-dependencies]
 nix = { version = "0.28.0", features = ["fs"] }
 

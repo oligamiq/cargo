@@ -335,7 +335,7 @@ dependencies = [
  "im-rc",
  "indexmap",
  "itertools 0.13.0",
- "jobserver 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "jobserver 0.1.32",
  "lazycell",
  "libc",
  "libgit2-sys",
@@ -482,7 +482,7 @@ dependencies = [
  "filetime 0.2.25 (git+https://github.com/oligamiq/filetime)",
  "hex",
  "ignore",
- "jobserver 0.1.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "jobserver 0.1.32",
  "libc",
  "miow",
  "rustc_runner",
@@ -2597,6 +2597,7 @@ version = "0.1.32"
 dependencies = [
  "libc",
  "nix 0.28.0",
+ "rand",
  "tempfile",
 ]
 

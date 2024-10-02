@@ -2,13 +2,14 @@ use libc::c_int;
 
 use crate::FromEnvErrorInner;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek as _, Write};
 use std::mem;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd as _, BorrowedFd, FromRawFd as _};
+use std::os::fd::{AsRawFd as _, BorrowedFd, FromRawFd as _, IntoRawFd};
 use std::path::Path;
 use std::process::Command;
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Once,
@@ -28,8 +29,7 @@ enum ClientCreationArg {
 
 #[derive(Debug)]
 pub struct Client {
-    read: File,
-    write: File,
+    read_and_write: Arc<Mutex<ReadAndWrite>>,
     creation_arg: ClientCreationArg,
     /// It is set to `None` if the pipe is shared with other processes, so it
     /// cannot support non-blocking mode.
@@ -41,41 +41,180 @@ pub struct Client {
 }
 
 #[derive(Debug)]
+pub struct ReadAndWrite {
+    read: File,
+    write: File,
+}
+
+impl ReadAndWrite {
+    pub fn new(
+        read: File,
+        write: File,
+    ) -> Self {
+        Self {
+            read,
+            write,
+        }
+    }
+
+    // read and clear only read buffer
+    pub fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        println!("## read");
+
+        // reset read cursor
+        self.read.seek(io::SeekFrom::Start(0))?;
+
+        // read
+        let mut all_buffer = Vec::new();
+        self.read.read_to_end(&mut all_buffer)?;
+
+        println!("## read, all_buffer: {:?}", all_buffer);
+
+        // copy to buf
+        let len = buf.len().min(all_buffer.len());
+
+        println!("## read, len: {}", len);
+
+        // expand len size because copy_from_slice will panic if len is not equal to buf.len()
+        let mut copied_buf = all_buffer.clone();
+        copied_buf.resize(buf.len(), 0);
+
+        println!("## read, copied_buf: {:?}", copied_buf);
+
+        buf.copy_from_slice(&copied_buf);
+
+        println!("## read, buf: {:?}", buf);
+
+        // clear only read buffer
+        self.read.seek(io::SeekFrom::Start(0))?;
+        self.read.set_len(0)?;
+        self.read.write_all(&all_buffer[len..])?;
+
+        println!("## read, all_buffer: {:?}", all_buffer);
+
+        Ok(len)
+    }
+
+    // append to file
+    pub fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        // reset read cursor
+        self.read.seek(io::SeekFrom::Start(0))?;
+
+        // read
+        let mut all_buffer = Vec::new();
+        self.read.read_to_end(&mut all_buffer)?;
+
+        println!("## write_all, all_buffer: {:?}", all_buffer);
+
+        // append
+        all_buffer.extend_from_slice(buf);
+
+        println!("## write_all, all_buffer: {:?}", all_buffer);
+
+        // clear
+        self.read.seek(io::SeekFrom::Start(0))?;
+        self.read.set_len(0)?;
+
+        println!("## write_all, all_buffer: {:?}", all_buffer);
+
+        // write
+        self.read.write_all(&all_buffer)?;
+
+        println!("## write_all, all_buffer: {:?}", all_buffer);
+
+        Ok(())
+    }
+
+    // append to file
+    pub fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // reset read cursor
+        self.read.seek(io::SeekFrom::Start(0))?;
+
+        // read
+        let mut all_buffer = Vec::new();
+        self.read.read_to_end(&mut all_buffer)?;
+
+        // append
+        all_buffer.extend_from_slice(buf);
+
+        // clear
+        self.read.seek(io::SeekFrom::Start(0))?;
+        self.read.set_len(0)?;
+
+        // write
+        self.read.write_all(&all_buffer)?;
+
+        Ok(buf.len())
+    }
+
+    pub fn get_raw_fd_read(&self) -> c_int {
+        self.read.as_raw_fd()
+    }
+
+    pub fn get_raw_fd_write(&self) -> c_int {
+        self.write.as_raw_fd()
+    }
+}
+
+#[derive(Debug)]
 pub struct Acquired {
     byte: u8,
 }
 
 impl Client {
     pub fn new(mut limit: usize) -> io::Result<Client> {
+        println!("## new");
         let client = unsafe { Client::mk()? };
 
         // I don't think the character written here matters, but I could be
         // wrong!
         const BUFFER: [u8; 128] = [b'|'; 128];
 
-        let mut write = &client.write;
+        let holder = client.read_and_write.clone();
+        let mut lock = holder.lock().unwrap();
+        let write = lock.get_raw_fd_write();
 
-        set_nonblocking(write.as_raw_fd(), true)?;
+        println!("## set_nonblocking");
+
+        set_nonblocking(write, true)?;
+
+        println!("## write_all");
 
         while limit > 0 {
+            println!("## write_all loop, limit: {}", limit);
             let n = limit.min(BUFFER.len());
 
-            write.write_all(&BUFFER[..n])?;
+            println!("## write_all loop, n: {}", n);
+            lock.write_all(&BUFFER[..n])?;
+
+            println!("## write_all loop, end");
+
             limit -= n;
         }
 
-        set_nonblocking(write.as_raw_fd(), false)?;
+        println!("## set_nonblocking");
+
+        set_nonblocking(write, false)?;
+
+        println!("## end");
 
         Ok(client)
     }
 
     unsafe fn mk() -> io::Result<Client> {
-        let mut pipes = [0; 2];
-
-        cvt(libc::pipe(pipes.as_mut_ptr()))?;
-        drop(set_cloexec(pipes[0], true));
-        drop(set_cloexec(pipes[1], true));
-        Ok(Client::from_fds(pipes[0], pipes[1]))
+        println!("## mk");
+        let rand = rand::random::<u64>();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(format!("/tmp/jobserver_{}", rand))?;
+        let fd = file.into_raw_fd();
+        drop(set_cloexec(fd, true));
+        drop(set_cloexec(fd, true));
+        let ret = Ok(Client::from_fds(fd, fd));
+        println!("## mk end");
+        ret
     }
 
     pub(crate) unsafe fn open(s: &str, check_pipe: bool) -> Result<Client, FromEnvErrorInner> {
@@ -92,6 +231,9 @@ impl Client {
 
     /// `--jobserver-auth=fifo:PATH`
     fn from_fifo(s: &str) -> Result<Option<Client>, FromEnvErrorInner> {
+        println!("## jobserver from_fifo is not supported");
+        return Err(FromEnvErrorInner::Unsupported);
+
         let mut parts = s.splitn(2, ':');
         if parts.next().unwrap() != "fifo" {
             return Ok(None);
@@ -114,8 +256,10 @@ impl Client {
         };
 
         Ok(Some(Client {
-            read: open_file()?,
-            write: open_file()?,
+            read_and_write: Arc::new(Mutex::new(ReadAndWrite {
+                read: open_file()?,
+                write: open_file()?,
+            })),
             creation_arg: ClientCreationArg::Fifo(path.into()),
             is_non_blocking: Some(AtomicBool::new(false)),
         }))
@@ -123,6 +267,9 @@ impl Client {
 
     /// `--jobserver-auth=R,W`
     unsafe fn from_pipe(s: &str, check_pipe: bool) -> Result<Option<Client>, FromEnvErrorInner> {
+        println!("## jobserver from_pipe is not supported");
+        return Err(FromEnvErrorInner::Unsupported);
+
         let mut parts = s.splitn(2, ',');
         let read = parts.next().unwrap();
         let write = match parts.next() {
@@ -190,23 +337,29 @@ impl Client {
         }
 
         Ok(Some(Client {
-            read: clone_fd_and_set_cloexec(read)?,
-            write: clone_fd_and_set_cloexec(write)?,
+            read_and_write: Arc::new(Mutex::new(ReadAndWrite::new(
+                clone_fd_and_set_cloexec(read)?,
+                clone_fd_and_set_cloexec(write)?,
+            ))),
             creation_arg,
             is_non_blocking: None,
         }))
     }
 
+
     unsafe fn from_fds(read: c_int, write: c_int) -> Client {
         Client {
-            read: File::from_raw_fd(read),
-            write: File::from_raw_fd(write),
+            read_and_write: Arc::new(Mutex::new(ReadAndWrite {
+                read: File::from_raw_fd(read),
+                write: File::from_raw_fd(write),
+            })),
             creation_arg: ClientCreationArg::Fds { read, write },
             is_non_blocking: None,
         }
     }
 
     pub fn acquire(&self) -> io::Result<Acquired> {
+        println!("## acquire");
         // Ignore interrupts and keep trying if that happens
         loop {
             if let Some(token) = self.acquire_allow_interrupts()? {
@@ -218,6 +371,7 @@ impl Client {
     /// Block waiting for a token, returning `None` if we're interrupted with
     /// EINTR.
     fn acquire_allow_interrupts(&self) -> io::Result<Option<Acquired>> {
+        println!("## acquire_allow_interrupts");
         // We don't actually know if the file descriptor here is set in
         // blocking or nonblocking mode. AFAIK all released versions of
         // `make` use blocking fds for the jobserver, but the unreleased
@@ -240,12 +394,15 @@ impl Client {
         // to shut us down, so we otherwise punt all errors upwards.
         unsafe {
             let mut fd: libc::pollfd = mem::zeroed();
-            let mut read = &self.read;
-            fd.fd = read.as_raw_fd();
+            let holder = self.read_and_write.clone();
+            let mut lock = holder.lock().unwrap();
+            fd.fd = lock.get_raw_fd_read();
             fd.events = libc::POLLIN;
+            println!("## pol 1l");
             loop {
                 let mut buf = [0];
-                match read.read(&mut buf) {
+                println!("## read");
+                match lock.read(&mut buf) {
                     Ok(1) => return Ok(Some(Acquired { byte: buf[0] })),
                     Ok(_) => {
                         return Err(io::Error::new(
@@ -259,6 +416,8 @@ impl Client {
                         _ => return Err(e),
                     },
                 }
+
+                println!("## poll 2");
 
                 loop {
                     fd.revents = 0;
@@ -279,11 +438,12 @@ impl Client {
 
     pub fn try_acquire(&self) -> io::Result<Option<Acquired>> {
         let mut buf = [0];
-        let mut fifo = &self.read;
+        let holder = self.read_and_write.clone();
+        let mut fifo = holder.lock().unwrap();
 
         if let Some(is_non_blocking) = self.is_non_blocking.as_ref() {
             if !is_non_blocking.load(Ordering::Relaxed) {
-                set_nonblocking(fifo.as_raw_fd(), true)?;
+                set_nonblocking(fifo.get_raw_fd_read(), true)?;
                 is_non_blocking.store(true, Ordering::Relaxed);
             }
         } else {
@@ -314,7 +474,9 @@ impl Client {
         // always quickly release a token). If that turns out to not be the
         // case we'll get an error anyway!
         let byte = data.map(|d| d.byte).unwrap_or(b'+');
-        match (&self.write).write(&[byte])? {
+        let holder = self.read_and_write.clone();
+        let mut lock = holder.lock().unwrap();
+        match lock.write(&[byte])? {
             1 => Ok(()),
             _ => Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -332,7 +494,9 @@ impl Client {
 
     pub fn available(&self) -> io::Result<usize> {
         let mut len = MaybeUninit::<c_int>::uninit();
-        cvt(unsafe { libc::ioctl(self.read.as_raw_fd(), libc::FIONREAD, len.as_mut_ptr()) })?;
+        let holder = self.read_and_write.clone();
+        let lock = holder.lock().unwrap();
+        cvt(unsafe { libc::ioctl(lock.get_raw_fd_read(), libc::FIONREAD, len.as_mut_ptr()) })?;
         Ok(unsafe { len.assume_init() } as usize)
     }
 
@@ -346,15 +510,17 @@ impl Client {
         // we'll configure the read/write file descriptors to *not* be
         // cloexec, so they're inherited across the exec and specified as
         // integers through `string_arg` above.
-        let read = self.read.as_raw_fd();
-        let write = self.write.as_raw_fd();
-        unsafe {
-            cmd.pre_exec(move || {
-                set_cloexec(read, false)?;
-                set_cloexec(write, false)?;
-                Ok(())
-            });
-        }
+        let holder = self.read_and_write.clone();
+        let lock = holder.lock().unwrap();
+        let read = lock.get_raw_fd_read();
+        let write = lock.get_raw_fd_write();
+        // unsafe {
+        //     cmd.pre_exec(move || {
+                set_cloexec(read, false).unwrap();
+                set_cloexec(write, false).unwrap();
+        //         Ok(())
+        //     });
+        // }
     }
 }
 
@@ -488,15 +654,14 @@ fn set_cloexec(fd: c_int, set: bool) -> io::Result<()> {
 }
 
 fn set_nonblocking(fd: c_int, set: bool) -> io::Result<()> {
-    let status_flag = if set { libc::O_NONBLOCK } else { 0 };
+    // let status_flag = if set { libc::O_NONBLOCK } else { 0 };
 
-    unsafe {
-        cvt(libc::fcntl(fd, libc::F_SETFL, status_flag))?;
-    }
+    // unsafe {
+    //     cvt(libc::fcntl(fd, libc::F_SETFL, status_flag))?;
+    // }
 
     Ok(())
 }
-
 fn cvt(t: c_int) -> io::Result<c_int> {
     if t == -1 {
         Err(io::Error::last_os_error())
