@@ -3,18 +3,19 @@ use crate::read2;
 
 use anyhow::{bail, Context, Result};
 use jobserver::Client;
+use rustc_runner::TaskResult;
 use shell_escape::escape;
 use tempfile::NamedTempFile;
 
 use std::collections::BTreeMap;
-use std::env;
+use std::{env, thread};
 use std::f32::consts::E;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
 use std::iter::once;
 use std::path::Path;
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{Command, ExitCode, ExitStatus, Output, Stdio};
 
 /// A builder object for an external process, similar to [`std::process::Command`].
 #[derive(Clone, Debug)]
@@ -301,30 +302,26 @@ impl ProcessBuilder {
     fn _output(&self) -> io::Result<Output> {
         #[cfg(all(target_os = "wasi", target_env = "p1"))]
         {
-            use rustc_driver::*;
-
             let mut cmd = self.build_command();
-            let cmd_name = cmd.get_program().to_str().unwrap();
-            if cmd_name != "rustc" {
-                return piped(&mut cmd, self.stdin.is_some()).spawn()?.wait_with_output();
-            }
+            if cmd.get_program().to_str() == Some("rustc") {
+                let TaskResult {
+                    is_error,
+                    stdout,
+                    stderr,
+                } = rustc_runner::rustc_run(cmd, self.stdin.clone());
 
-            struct NoneCallbacks;
-            impl Callbacks for NoneCallbacks {}
-            let mut callbacks = NoneCallbacks;
-            let mut args = vec!["rustc".to_string()];
-            // let additional_args = std::env::var("RUSTFLAGS").unwrap_or_default();
-            // args.extend(additional_args.split_whitespace().map(|s| s.to_string()));
-            let ex_args = cmd.get_args().map(|arg| arg.to_str().unwrap().to_string()).collect::<Vec<_>>();
-            args.extend(ex_args);
-            println!("args: {:?}", args);
-            let rustc = RunCompiler::new(&args, &mut callbacks);
-            rustc.run().unwrap();
-            return Ok(Output {
-                status: ExitStatus::default(),
-                stdout: Vec::new(),
-                stderr: Vec::new(),
-            });
+                if is_error {
+                    return Err(io::Error::new(io::ErrorKind::Other, "rustc failed"));
+                }
+
+                return Ok(Output {
+                    status: ExitStatus::default(),
+                    stdout,
+                    stderr,
+                });
+            } else {
+                return Err(io::Error::new(io::ErrorKind::Other, "unsupported command"));
+            }
         }
 
         #[cfg(not(all(target_os = "wasi", target_env = "p1")))]

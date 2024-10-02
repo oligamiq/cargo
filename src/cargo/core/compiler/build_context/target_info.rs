@@ -167,6 +167,7 @@ impl TargetInfo {
             //
             // Search `--print` to see what we query so far.
             let mut process = rustc.workspace_process();
+
             apply_env_config(gctx, &mut process)?;
             process
                 .arg("-")

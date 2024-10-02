@@ -28,8 +28,7 @@ core-foundation.workspace = true
 libc.workspace = true
 
 [target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
-rustc_driver.workspace = true
-rustc_driver_impl.workspace = true
+rustc_runner.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 miow.workspace = true

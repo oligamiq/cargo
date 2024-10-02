@@ -11,6 +11,8 @@ use std::iter;
 use std::path::{Component, Path, PathBuf};
 use tempfile::Builder as TempFileBuilder;
 
+use crate::alt;
+
 /// Joins paths into a string suitable for the `PATH` environment variable.
 ///
 /// This is equivalent to [`std::env::join_paths`], but includes a more
@@ -18,19 +20,28 @@ use tempfile::Builder as TempFileBuilder;
 /// environment variable this is will be used for, which is included in the
 /// error message.
 pub fn join_paths<T: AsRef<OsStr>>(paths: &[T], env: &str) -> Result<OsString> {
-    env::join_paths(paths.iter()).with_context(|| {
-        let mut message = format!(
-            "failed to join paths from `${env}` together\n\n\
-             Check if any of path segments listed below contain an \
-             unterminated quote character or path separator:"
-        );
-        for path in paths {
-            use std::fmt::Write;
-            write!(&mut message, "\n    {:?}", Path::new(path)).unwrap();
-        }
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+    {
+        env::join_paths(paths.iter()).with_context(|| {
+            let mut message = format!(
+                "failed to join paths from `${env}` together\n\n\
+                Check if any of path segments listed below contain an \
+                unterminated quote character or path separator:"
+            );
+            for path in paths {
+                use std::fmt::Write;
+                write!(&mut message, "\n    {:?}", Path::new(path)).unwrap();
+            }
 
-        message
-    })
+            message
+        })
+    }
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        // WASI does not support `env::join_paths`.
+        Ok(paths.iter().map(|p| p.as_ref().to_str().unwrap()).collect::<Vec<_>>().join(":").into())
+    }
 }
 
 /// Returns the name of the environment variable used for searching for
@@ -66,11 +77,17 @@ pub fn dylib_path_envvar() -> &'static str {
 ///
 /// Note that some operating systems will have defaults if this is empty that
 /// will need to be dealt with.
+#[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub fn dylib_path() -> Vec<PathBuf> {
     match env::var_os(dylib_path_envvar()) {
         Some(var) => env::split_paths(&var).collect(),
         None => Vec::new(),
     }
+}
+
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub fn dylib_path() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// Normalize a path, removing things like `.` and `..`.
@@ -115,18 +132,39 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 pub fn resolve_executable(exec: &Path) -> Result<PathBuf> {
     if exec.components().count() == 1 {
         let paths = env::var_os("PATH").ok_or_else(|| anyhow::format_err!("no PATH"))?;
-        let candidates = env::split_paths(&paths).flat_map(|path| {
-            let candidate = path.join(&exec);
-            let with_exe = if env::consts::EXE_EXTENSION.is_empty() {
-                None
-            } else {
-                Some(candidate.with_extension(env::consts::EXE_EXTENSION))
-            };
-            iter::once(candidate).chain(with_exe)
-        });
-        for candidate in candidates {
-            if candidate.is_file() {
-                return Ok(candidate);
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            let candidates = env::split_paths(&paths).flat_map(|path| {
+                let candidate = path.join(&exec);
+                let with_exe = if env::consts::EXE_EXTENSION.is_empty() {
+                    None
+                } else {
+                    Some(candidate.with_extension(env::consts::EXE_EXTENSION))
+                };
+                iter::once(candidate).chain(with_exe)
+            });
+            for candidate in candidates {
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
+            }
+        }
+
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            let candidates = alt::split_paths(&paths).into_iter().flat_map(|path| {
+                let candidate = PathBuf::from(path).join(&exec);
+                let with_exe = if env::consts::EXE_EXTENSION.is_empty() {
+                    None
+                } else {
+                    Some(candidate.with_extension(env::consts::EXE_EXTENSION))
+                };
+                iter::once(candidate).chain(with_exe)
+            });
+            for candidate in candidates {
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
 
@@ -743,14 +781,21 @@ pub fn strip_prefix_canonical<P: AsRef<Path>>(
 /// This function is idempotent and in addition to that it won't exclude ``p`` from cache if it
 /// already exists.
 pub fn create_dir_all_excluded_from_backups_atomic(p: impl AsRef<Path>) -> Result<()> {
+    println!("## Hello from create_dir_all_excluded_from_backups_atomic");
     let path = p.as_ref();
+    println!("## path: {:?}", path);
     if path.is_dir() {
+        println!("## path is a directory");
         return Ok(());
     }
+    println!("## path is not a directory");
 
     let parent = path.parent().unwrap();
+    println!("## parent: {:?}", parent);
     let base = path.file_name().unwrap();
+    println!("## base: {:?}", base);
     create_dir_all(parent)?;
+    println!("## create_dir_all(parent) done");
     // We do this in two steps (first create a temporary directory and exclude
     // it from backups, then rename it to the desired name. If we created the
     // directory directly where it should be and then excluded it from backups
@@ -763,20 +808,32 @@ pub fn create_dir_all_excluded_from_backups_atomic(p: impl AsRef<Path>) -> Resul
     // easily sure that rename() will succeed (the new name needs to be on the same mount
     // point as the old one).
     let tempdir = TempFileBuilder::new().prefix(base).tempdir_in(parent)?;
+    println!("## tempdir: {:?}", tempdir);
     exclude_from_backups(tempdir.path());
+    println!("## exclude_from_backups(tempdir.path()) done");
     exclude_from_content_indexing(tempdir.path());
+    println!("## exclude_from_content_indexing(tempdir.path()) done");
     // Previously std::fs::create_dir_all() (through paths::create_dir_all()) was used
     // here to create the directory directly and fs::create_dir_all() explicitly treats
     // the directory being created concurrently by another thread or process as success,
     // hence the check below to follow the existing behavior. If we get an error at
     // rename() and suddenly the directory (which didn't exist a moment earlier) exists
     // we can infer from it's another cargo process doing work.
-    if let Err(e) = fs::rename(tempdir.path(), path) {
+    let temp_dir_path = tempdir.path();
+    println!("## temp_dir_path: {:?}", temp_dir_path);
+    println!("## path: {:?}", path);
+    let renamed = fs::rename(temp_dir_path, path);
+    println!("## fs::rename(tempdir.path(), path) called");
+    if let Err(e) = renamed {
+        println!("## fs::rename(tempdir.path(), path) failed: {:?}", e);
         if !path.exists() {
+            println!("## path does not exist");
             return Err(anyhow::Error::from(e))
                 .with_context(|| format!("failed to create directory `{}`", path.display()));
         }
+        println!("## path exists");
     }
+    println!("## fs::rename(tempdir.path(), path) done");
     Ok(())
 }
 

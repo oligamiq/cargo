@@ -149,28 +149,42 @@ impl Layout {
         target: Option<CompileTarget>,
         dest: &str,
     ) -> CargoResult<Layout> {
+        println!("# Layout::new");
         let mut root = ws.target_dir();
+        println!("# root 0: {:?}", root);
         if let Some(target) = target {
             root.push(target.short_name());
+            println!("# target: {:?}", target.short_name());
         }
+        println!("# root 1: {:?}", root);
         let dest = root.join(dest);
+        println!("# dest: 1: {:?}", dest);
         // If the root directory doesn't already exist go ahead and create it
         // here. Use this opportunity to exclude it from backups as well if the
         // system supports it since this is a freshly created folder.
         //
-        paths::create_dir_all_excluded_from_backups_atomic(root.as_path_unlocked())?;
+        let as_path = root.as_path_unlocked();
+        println!("# as_path: {:?}", as_path);
+        paths::create_dir_all_excluded_from_backups_atomic(as_path)?;
+        println!("# root 2: {:?}", root);
         // Now that the excluded from backups target root is created we can create the
         // actual destination (sub)subdirectory.
         paths::create_dir_all(dest.as_path_unlocked())?;
+        println!("# dest 2: {:?}", dest);
 
         // For now we don't do any more finer-grained locking on the artifact
         // directory, so just lock the entire thing for the duration of this
         // compile.
         let lock = dest.open_rw_exclusive_create(".cargo-lock", ws.gctx(), "build directory")?;
+        println!("# lock: {:?}", lock);
         let root = root.into_path_unlocked();
+        println!("# root 3: {:?}", root);
         let dest = dest.into_path_unlocked();
+        println!("# dest 3: {:?}", dest);
         let deps = dest.join("deps");
+        println!("# deps: {:?}", deps);
         let artifact = deps.join("artifact");
+        println!("# artifact: {:?}", artifact);
 
         Ok(Layout {
             deps,

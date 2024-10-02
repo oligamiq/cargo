@@ -7,6 +7,7 @@ use cargo::util::network::http::http_handle;
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use cargo::util::network::http::needs_custom_http_transport;
 use cargo::util::{self, closest_msg, command_prelude, CargoResult};
+use cargo_util::alt;
 use cargo_util::{ProcessBuilder, ProcessError};
 use cargo_util_schemas::manifest::StringOrVec;
 use std::collections::BTreeMap;
@@ -336,7 +337,14 @@ fn is_executable<P: AsRef<Path>>(path: P) -> bool {
 
 fn search_directories(gctx: &GlobalContext) -> Vec<PathBuf> {
     let mut path_dirs = if let Some(val) = gctx.get_env_os("PATH") {
-        env::split_paths(&val).collect()
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+        {
+            env::split_paths(&val).collect()
+        }
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        {
+            alt::split_paths(&val)
+        }
     } else {
         vec![]
     };

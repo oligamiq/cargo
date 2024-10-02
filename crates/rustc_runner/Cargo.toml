@@ -1,0 +1,21 @@
+[package]
+name = "rustc_runner"
+version = "0.1.0"
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+
+[target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
+rustc_driver.workspace = true
+rustc_driver_impl.workspace = true
+capture_io.workspace = true
+
+[lints]
+workspace = true

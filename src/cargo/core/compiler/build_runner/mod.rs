@@ -134,6 +134,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
     /// [`ops::cargo_compile`]: ../../../ops/cargo_compile/index.html
     #[tracing::instrument(skip_all)]
     pub fn compile(mut self, exec: &Arc<dyn Executor>) -> CargoResult<Compilation<'gctx>> {
+        println!("compile");
         // A shared lock is held during the duration of the build since rustc
         // needs to read from the `src` cache, and we don't want other
         // commands modifying the `src` cache while it is running.
@@ -141,15 +142,25 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             .bcx
             .gctx
             .acquire_package_cache_lock(CacheLockMode::Shared)?;
+        println!("lock acquired");
         let mut queue = JobQueue::new(self.bcx);
+        println!("queue created");
         let mut plan = BuildPlan::new();
+        println!("plan created: {:?}", plan);
         let build_plan = self.bcx.build_config.build_plan;
+        println!("build_plan: {:?}", build_plan);
         self.lto = super::lto::generate(self.bcx)?;
+        println!("lto generated");
         self.prepare_units()?;
+        println!("units prepared");
         self.prepare()?;
+        println!("prepared");
         custom_build::build_map(&mut self)?;
+        println!("build_map");
         self.check_collisions()?;
+        println!("check_collisions");
         self.compute_metadata_for_doc_units();
+        println!("metadata computed");
 
         // We need to make sure that if there were any previous docs
         // already compiled, they were compiled with the same Rustc version that we're currently
@@ -162,11 +173,14 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
         if self.bcx.build_config.mode.is_doc() {
             RustDocFingerprint::check_rustdoc_fingerprint(&self)?
         }
+        println!("fingerprint checked");
 
         for unit in &self.bcx.roots {
             let force_rebuild = self.bcx.build_config.force_rebuild;
+            println!("compiling unit: {:?}", unit);
             super::compile(&mut self, &mut queue, &mut plan, unit, exec, force_rebuild)?;
         }
+        println!("compiled");
 
         // Now that we've got the full job queue and we've done all our
         // fingerprint analysis to determine what to run, bust all the memoized
@@ -177,14 +191,17 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
         for fingerprint in self.fingerprints.values() {
             fingerprint.clear_memoized();
         }
+        println!("fingerprints cleared");
 
         // Now that we've figured out everything that we're going to do, do it!
         queue.execute(&mut self, &mut plan)?;
+        println!("queue executed");
 
         if build_plan {
             plan.set_inputs(self.build_plan_inputs()?);
             plan.output_plan(self.bcx.gctx);
         }
+        println!("plan output");
 
         // Add `OUT_DIR` to env vars if unit has a build script.
         let units_with_build_script = &self
@@ -194,6 +211,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             .filter(|unit| self.build_scripts.contains_key(unit))
             .dedup_by(|x, y| x.pkg.package_id() == y.pkg.package_id())
             .collect::<Vec<_>>();
+        println!("units_with_build_script: {:?}", units_with_build_script);
         for unit in units_with_build_script {
             for dep in &self.bcx.unit_graph[unit] {
                 if dep.unit.mode.is_run_custom_build() {
@@ -211,6 +229,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
                 }
             }
         }
+        println!("extra_env added");
 
         // Collect the result of the build into `self.compilation`.
         for unit in &self.bcx.roots {
@@ -239,6 +258,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
                         .push(self.unit_output(unit, bindst));
                 }
             }
+            println!("output collected");
 
             // Collect information for `rustdoc --test`.
             if unit.mode.is_doc_test() {
@@ -289,9 +309,11 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
                     env: artifact::get_env(&self, self.unit_deps(unit))?,
                 });
             }
+            println!("doc_test collected");
 
             super::output_depinfo(&mut self, unit)?;
         }
+        println!("depinfo output");
 
         for (script_meta, output) in self.build_script_outputs.lock().unwrap().iter() {
             self.compilation
@@ -304,6 +326,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
                 self.compilation.native_dirs.insert(dir.clone());
             }
         }
+        println!("extra_env added");
         Ok(self.compilation)
     }
 
@@ -323,25 +346,37 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
 
     #[tracing::instrument(skip_all)]
     pub fn prepare_units(&mut self) -> CargoResult<()> {
+        println!("prepare_units");
         let dest = self.bcx.profiles.get_dir_name();
+        println!("dest: {:?}", dest);
         let host_layout = Layout::new(self.bcx.ws, None, &dest)?;
+        println!("host_layout");
         let mut targets = HashMap::new();
+        println!("targets: 0");
         for kind in self.bcx.all_kinds.iter() {
             if let CompileKind::Target(target) = *kind {
                 let layout = Layout::new(self.bcx.ws, Some(target), &dest)?;
                 targets.insert(target, layout);
+                println!("target inserted: {:?}", target);
             }
+            println!("kind: {:?}", kind);
         }
+        println!("targets");
         self.primary_packages
             .extend(self.bcx.roots.iter().map(|u| u.pkg.package_id()));
+        println!("primary_packages: {:?}", self.primary_packages);
         self.compilation
             .root_crate_names
             .extend(self.bcx.roots.iter().map(|u| u.target.crate_name()));
+        println!("root_crate");
 
         self.record_units_requiring_metadata();
+        println!("record_units_requiring_metadata");
 
         let files = CompilationFiles::new(self, host_layout, targets);
+        println!("files: 1");
         self.files = Some(files);
+        println!("files");
         Ok(())
     }
 

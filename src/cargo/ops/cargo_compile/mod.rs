@@ -156,7 +156,10 @@ pub fn compile_ws<'a>(
     }
     crate::core::gc::auto_gc(bcx.gctx);
     let build_runner = BuildRunner::new(&bcx)?;
-    build_runner.compile(exec)
+    println!("### bcx: 4");
+    let ret = build_runner.compile(exec);
+    println!("### bcx: 5");
+    ret
 }
 
 /// Executes `rustc --print <VALUE>`.
@@ -242,6 +245,7 @@ pub fn create_bcx<'a, 'gctx>(
     let mut target_data = RustcTargetData::new(ws, &build_config.requested_kinds)?;
 
     let specs = spec.to_package_id_specs(ws)?;
+
     let has_dev_units = {
         // Rustdoc itself doesn't need dev-dependencies. But to scrape examples from packages in the
         // workspace, if any of those packages need dev-dependencies, then we need include dev-dependencies
@@ -263,7 +267,9 @@ pub fn create_bcx<'a, 'gctx>(
             HasDevUnits::No
         }
     };
+
     let dry_run = false;
+
     let resolve = ops::resolve_ws_with_opts(
         ws,
         &mut target_data,
@@ -274,6 +280,7 @@ pub fn create_bcx<'a, 'gctx>(
         crate::core::resolver::features::ForceAllTargets::No,
         dry_run,
     )?;
+
     let WorkspaceResolve {
         mut pkg_set,
         workspace_resolve,

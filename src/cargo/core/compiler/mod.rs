@@ -94,7 +94,7 @@ use crate::util::errors::{CargoResult, VerboseError};
 use crate::util::interning::InternedString;
 use crate::util::machine_message::{self, Message};
 use crate::util::{add_path_args, internal};
-use cargo_util::{paths, ProcessBuilder, ProcessError};
+use cargo_util::{alt, paths, ProcessBuilder, ProcessError};
 use cargo_util_schemas::manifest::TomlDebugInfo;
 use cargo_util_schemas::manifest::TomlTrimPaths;
 use cargo_util_schemas::manifest::TomlTrimPathsValue;
@@ -643,7 +643,10 @@ fn add_plugin_deps(
 ) -> CargoResult<()> {
     let var = paths::dylib_path_envvar();
     let search_path = rustc.get_env(var).unwrap_or_default();
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     let mut search_path = env::split_paths(&search_path).collect::<Vec<_>>();
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    let mut search_path = alt::split_paths(&search_path);
     for (pkg_id, metadata) in &build_scripts.plugins {
         let output = build_script_outputs
             .get(*metadata)

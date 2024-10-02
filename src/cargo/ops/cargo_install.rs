@@ -17,7 +17,7 @@ use crate::util::{Filesystem, GlobalContext, Rustc};
 use crate::{drop_println, ops};
 
 use anyhow::{bail, Context as _};
-use cargo_util::paths;
+use cargo_util::{alt, paths};
 use cargo_util_schemas::core::PartialVersion;
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 use gix::discover::is_git;
@@ -756,8 +756,10 @@ pub fn install(
         // Print a warning that if this directory isn't in PATH that they won't be
         // able to run these commands.
         let path = gctx.get_env_os("PATH").unwrap_or_default();
+        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
         let dst_in_path = env::split_paths(&path).any(|path| path == dst);
-
+        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+        let dst_in_path = alt::split_paths(&path).into_iter().any(|path| path == dst);
         if !dst_in_path {
             gctx.shell().warn(&format!(
                 "be sure to add `{}` to your PATH to be \

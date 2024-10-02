@@ -124,7 +124,14 @@ pub fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
 #[cfg(not(windows))]
 #[inline]
 pub fn try_canonicalize<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    std::fs::canonicalize(&path)
+    let path = path.as_ref();
+
+    // canonicalize is not supported on WASI
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    return Ok(PathBuf::from(path));
+
+    // #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+    return std::fs::canonicalize(&path);
 }
 
 #[cfg(windows)]

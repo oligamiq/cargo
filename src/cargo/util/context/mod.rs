@@ -458,6 +458,7 @@ impl GlobalContext {
 
     /// Gets the path to the `cargo` executable.
     pub fn cargo_exe(&self) -> CargoResult<&Path> {
+        println!("cargo_exe");
         self.cargo_exe
             .try_borrow_with(|| {
                 let from_env = || -> CargoResult<PathBuf> {
@@ -465,11 +466,14 @@ impl GlobalContext {
                     // commands that use Cargo as a library to inherit (via `cargo <subcommand>`)
                     // or set (by setting `$CARGO`) a correct path to `cargo` when the current exe
                     // is not actually cargo (e.g., `cargo-*` binaries, Valgrind, `ld.so`, etc.).
+                    let path = self.get_env_os(crate::CARGO_ENV)
+                        .map(PathBuf::from)
+                        .ok_or_else(|| anyhow!("$CARGO not set"))?;
+                    println!("from_env: path: {:?}", path);
                     let exe = try_canonicalize(
-                        self.get_env_os(crate::CARGO_ENV)
-                            .map(PathBuf::from)
-                            .ok_or_else(|| anyhow!("$CARGO not set"))?,
+                        path,
                     )?;
+                    println!("from_env: exe: {:?}", exe);
                     Ok(exe)
                 };
 
@@ -479,6 +483,7 @@ impl GlobalContext {
                     // it depends on `/proc` being mounted on Linux, and some environments
                     // (like containers or chroots) may not have that available.
                     let exe = try_canonicalize(env::current_exe()?)?;
+                    println!("from_current_exe: {:?}", exe);
                     Ok(exe)
                 }
 
@@ -495,6 +500,7 @@ impl GlobalContext {
                         .map(PathBuf::from)
                         .next()
                         .ok_or_else(|| anyhow!("no argv[0]"))?;
+                    println!("from_argv: {:?}", argv0);
                     paths::resolve_executable(&argv0)
                 }
 
@@ -502,6 +508,7 @@ impl GlobalContext {
                     .or_else(|_| from_current_exe())
                     .or_else(|_| from_argv())
                     .context("couldn't get the path to cargo executable")?;
+                println!("exe: {:?}", exe);
                 Ok(exe)
             })
             .map(AsRef::as_ref)
