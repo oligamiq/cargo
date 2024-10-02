@@ -1,4 +1,4 @@
-use std::{process::Command, sync::{Arc, LazyLock, Mutex}};
+use std::{process::Command, sync::{Arc, LazyLock, Mutex}, thread};
 
 use capture_io::{StdinCapturer, StdoutCapturer};
 use rustc_driver::{Callbacks, RunCompiler};
@@ -67,6 +67,11 @@ pub fn rustc_run(
         input,
         args,
     };
-    let result = task.run_rustc();
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let result = task.run_rustc();
+        tx.send(result).unwrap();
+    });
+    let result = rx.recv().unwrap();
     result
 }
