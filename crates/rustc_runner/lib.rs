@@ -3,15 +3,6 @@ use std::{process::Command, sync::{Arc, LazyLock, Mutex}};
 use capture_io::{StdinCapturer, StdoutCapturer};
 use rustc_driver::{Callbacks, RunCompiler};
 
-pub struct Runner {
-    rx_on_result: Arc<std::sync::mpsc::Receiver<TaskResult>>,
-    tx_on_manage: Arc<std::sync::mpsc::Sender<Task>>,
-    handle: std::thread::JoinHandle<()>,
-}
-
-unsafe impl Sync for Runner {}
-unsafe impl Send for Runner {}
-
 pub struct Task {
     input: Option<Vec<u8>>,
     args: Vec<String>,
@@ -62,29 +53,6 @@ pub struct TaskResult {
 struct NoneCallbacks;
 impl Callbacks for NoneCallbacks {}
 
-pub static RUNNER: LazyLock<Runner> = LazyLock::new(|| {
-    let (tx_on_result, rx_on_result) = std::sync::mpsc::channel();
-    let (tx_on_manage, rx_on_manage) = std::sync::mpsc::channel::<Task>();
-    let handle = std::thread::spawn(move || {
-        loop {
-            match rx_on_manage.recv() {
-                Ok(task) => {
-                    let result = task.run_rustc();
-                    tx_on_result.send(result).unwrap();
-                }
-                Err(_) => {
-                    panic!("rx_on_manage closed");
-                },
-            }
-        }
-    });
-    Runner {
-        rx_on_result: Arc::new(rx_on_result),
-        tx_on_manage: Arc::new(tx_on_manage),
-        handle,
-    }
-});
-
 pub fn rustc_run(
     cmd: Command,
     input: Option<Vec<u8>>,
@@ -99,7 +67,6 @@ pub fn rustc_run(
         input,
         args,
     };
-    RUNNER.tx_on_manage.send(task).unwrap();
-    let result = RUNNER.rx_on_result.recv().unwrap();
+    let result = task.run_rustc();
     result
 }
