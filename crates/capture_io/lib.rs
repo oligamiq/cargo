@@ -7,14 +7,6 @@ pub struct StdoutCapturer {
 }
 
 pub fn exchange_local_fd(from_fd: i32, to_fd: i32) -> Result<(), std::io::Error> {
-    // #[link(wasm_import_module = "extend_imports")]
-    // extern "C" {
-    //     // This function is implemented in the `extend_imports` module.
-    //     fn exchange_local_fd(from_fd: i32, to_fd: i32) -> i32;
-    // }
-
-    // let ret = unsafe { exchange_local_fd(from_fd, to_fd) };
-
     let rand = rand::random::<u64>();
     let tmp_file = format!("/tmp/exchange_local_fd_{}", rand);
     let tmp_file_fd = std::fs::OpenOptions::new()
