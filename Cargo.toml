@@ -81,8 +81,7 @@ proptest = "1.5.0"
 pulldown-cmark = { version = "0.11.0", default-features = false, features = ["html"] }
 rand = "0.8.5"
 regex = "1.10.0"
-# rusqlite = { version = "0.32.0", features = ["bundled"] }
-rusqlite = { git = "https://github.com/oligamiq/rusqlite", features = ["bundled"] }
+rusqlite = { version = "0.32.0", features = ["bundled"] }
 rustfix = { version = "0.8.2", path = "crates/rustfix" }
 same-file = "1.0.6"
 security-framework = "2.11.1"
@@ -119,9 +118,6 @@ capture_io = { version = "0.1.0", path = "crates/capture_io" }
 rustc_driver = { path = "../../../compiler/rustc_driver" }
 rustc_driver_impl = { path = "../../../compiler/rustc_driver_impl", features = ["rustc_use_parallel_compiler", "llvm"] }
 rustc_runner = { path = "crates/rustc_runner" }
-
-# [patch.crates-io]
-# libz-sys = { git = "https://github.com/oligamiq/libz-sys", default-features = false }
 
 [workspace.lints.rust]
 rust_2018_idioms = "warn" # TODO: could this be removed?
