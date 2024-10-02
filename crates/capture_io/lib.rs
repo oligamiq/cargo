@@ -7,18 +7,39 @@ pub struct StdoutCapturer {
 }
 
 pub fn exchange_local_fd(from_fd: i32, to_fd: i32) -> Result<(), std::io::Error> {
-    #[link(wasm_import_module = "extend_imports")]
-    extern "C" {
-        // This function is implemented in the `extend_imports` module.
-        fn exchange_local_fd(from_fd: i32, to_fd: i32) -> i32;
+    // #[link(wasm_import_module = "extend_imports")]
+    // extern "C" {
+    //     // This function is implemented in the `extend_imports` module.
+    //     fn exchange_local_fd(from_fd: i32, to_fd: i32) -> i32;
+    // }
+
+    // let ret = unsafe { exchange_local_fd(from_fd, to_fd) };
+
+    let rand = rand::random::<u64>();
+    let tmp_file = format!("/tmp/exchange_local_fd_{}", rand);
+    let tmp_file_fd = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&tmp_file)?
+        .as_raw_fd();
+
+    if unsafe { libc::__wasilibc_fd_renumber(from_fd, tmp_file_fd) } != 0 {
+        return Err(std::io::Error::last_os_error())
     }
 
-    let ret = unsafe { exchange_local_fd(from_fd, to_fd) };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+    if unsafe { libc::__wasilibc_fd_renumber(to_fd, from_fd) } != 0 {
+        return Err(std::io::Error::last_os_error())
     }
+
+    if unsafe { libc::__wasilibc_fd_renumber(tmp_file_fd, to_fd) } != 0 {
+        return Err(std::io::Error::last_os_error())
+    }
+
+    // rm tmp file
+    std::fs::remove_file(&tmp_file)?;
+
+    return Ok(());
 }
 
 impl StdoutCapturer {
