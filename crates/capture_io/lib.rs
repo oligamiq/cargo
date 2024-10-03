@@ -1,9 +1,13 @@
 use std::{io::{Read as _, Write as _}, os::fd::AsRawFd as _};
 
+#[derive(Debug)]
 pub struct StdoutCapturer {
     original_stdout_fd: i32,
     capture_file: std::fs::File,
     capture_file_name: String,
+
+    #[allow(dead_code)]
+    read_buf: i64,
 }
 
 pub fn exchange_local_fd(from_fd: i32, to_fd: i32) -> Result<(), std::io::Error> {
@@ -35,7 +39,7 @@ pub fn exchange_local_fd(from_fd: i32, to_fd: i32) -> Result<(), std::io::Error>
 }
 
 impl StdoutCapturer {
-    pub fn start_capture_stdout() -> Result<StdoutCapturer, std::io::Error> {
+    pub fn new_stdout() -> Result<StdoutCapturer, std::io::Error> {
         std::io::stdout().flush()?;
 
         let rand = rand::random::<u64>();
@@ -48,18 +52,15 @@ impl StdoutCapturer {
             .truncate(true)
             .open(&file_name)?;
 
-        let fd = capture_file.as_raw_fd();
-
-        exchange_local_fd(1, fd)?;
-
         Ok(StdoutCapturer {
+            read_buf: 0,
             original_stdout_fd: 1,
             capture_file,
             capture_file_name: file_name,
         })
     }
 
-    pub fn start_capture_stderr() -> Result<StdoutCapturer, std::io::Error> {
+    pub fn new_stderr() -> Result<StdoutCapturer, std::io::Error> {
         std::io::stderr().flush()?;
 
         let rand = rand::random::<u64>();
@@ -72,15 +73,20 @@ impl StdoutCapturer {
             .truncate(true)
             .open(&file_name)?;
 
-        let fd = capture_file.as_raw_fd();
-
-        exchange_local_fd(2, fd)?;
-
         Ok(StdoutCapturer {
+            read_buf: 0,
             original_stdout_fd: 2,
             capture_file,
             capture_file_name: file_name,
         })
+    }
+
+    pub fn start_capture(&self) -> Result<(), std::io::Error> {
+        let fd = self.capture_file.as_raw_fd();
+
+        exchange_local_fd(1, fd)?;
+
+        Ok(())
     }
 
     pub fn stop_capture(self) -> Result<Vec<u8>, std::io::Error> {
@@ -100,9 +106,24 @@ impl StdoutCapturer {
 
         Ok(buf)
     }
+
+//     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+//         let fd = self.original_stdout_fd;
+//         let offset = self.read_buf;
+
+//         let n = unsafe { libc::pread(fd, buf.as_mut_ptr() as *mut _, buf.len(), offset) };
+
+//         if n < 0 {
+//             return Err(std::io::Error::last_os_error());
+//         }
+
+//         self.read_buf += n as i64;
+
+//         Ok(n as usize)
+//     }
 }
 
-
+#[derive(Debug)]
 pub struct StdinCapturer {
     original_stdin_fd: i32,
     capture_file: std::fs::File,
@@ -110,16 +131,26 @@ pub struct StdinCapturer {
 }
 
 impl StdinCapturer {
-    pub fn set_stdin(input: &[u8]) -> Result<StdinCapturer, std::io::Error> {
+    pub fn new() -> Result<StdinCapturer, std::io::Error> {
         let rand = rand::random::<u64>();
 
         let file_name = format!("/tmp/capture_stdin_{}", rand);
 
-        let mut capture_file = std::fs::OpenOptions::new()
+        let capture_file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(&file_name)?;
+
+        Ok(StdinCapturer {
+            original_stdin_fd: 0,
+            capture_file,
+            capture_file_name: file_name,
+        })
+    }
+
+    pub fn set_stdin(&self, input: &[u8]) -> Result<(), std::io::Error> {
+        let mut capture_file = self.capture_file.try_clone()?;
 
         capture_file.write_all(input)?;
 
@@ -127,11 +158,7 @@ impl StdinCapturer {
 
         exchange_local_fd(0, fd)?;
 
-        Ok(StdinCapturer {
-            original_stdin_fd: 0,
-            capture_file,
-            capture_file_name: file_name,
-        })
+        Ok(())
     }
 
     pub fn stop_capture(self) -> Result<(), std::io::Error> {

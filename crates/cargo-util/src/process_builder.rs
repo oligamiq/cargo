@@ -309,7 +309,7 @@ impl ProcessBuilder {
                     is_error,
                     stdout,
                     stderr,
-                } = rustc_runner::rustc_run(cmd, self.stdin.clone());
+                } = rustc_runner::rustc_run_only(&cmd, self.stdin.clone());
 
                 if is_error {
                     return Err(io::Error::new(io::ErrorKind::Other, "rustc failed"));
@@ -375,6 +375,7 @@ impl ProcessBuilder {
     /// and stored in the returned `Output` object. If it is false, no caching
     /// is done, and the callbacks are solely responsible for handling the
     /// output.
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn exec_with_streaming(
         &self,
         on_stdout_line: &mut dyn FnMut(&str) -> Result<()>,
@@ -480,6 +481,21 @@ impl ProcessBuilder {
         }
 
         Ok(output)
+    }
+
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    pub fn exec_with_streaming(
+        &self,
+        on_stdout_line: &mut dyn FnMut(&str) -> Result<()>,
+        on_stderr_line: &mut dyn FnMut(&str) -> Result<()>,
+        capture_output: bool,
+    ) -> Result<Output> {
+        println!("called exec_with_streaming");
+
+        let cmd = self.build_command();
+        println!("cmd: {:?}", cmd);
+
+        rustc_runner::rustc_run_with_streaming(&cmd, on_stdout_line, on_stderr_line, capture_output)
     }
 
     /// Builds the command with an `@<path>` argfile that contains all the

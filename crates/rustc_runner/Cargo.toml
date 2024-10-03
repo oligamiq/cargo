@@ -16,6 +16,7 @@ path = "lib.rs"
 rustc_driver.workspace = true
 rustc_driver_impl.workspace = true
 capture_io.workspace = true
+anyhow.workspace = true
 
 [lints]
 workspace = true
