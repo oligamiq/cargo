@@ -57,6 +57,10 @@ pub fn rustc_run(
     cmd: Command,
     input: Option<Vec<u8>>,
 ) -> TaskResult {
+    // get env
+    let ex_env = cmd.get_envs().collect::<Vec<_>>();
+    let mut default_env = std::env::vars().collect::<Vec<_>>();
+
     let cmd_name = cmd.get_program().to_string_lossy().to_string();
     if cmd_name != "rustc" {
         panic!("Only rustc is supported");
@@ -69,9 +73,28 @@ pub fn rustc_run(
     };
     let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
+        for (key, value) in ex_env {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
         let result = task.run_rustc();
+
+        for (key, value) in ex_env {
+            if let Some(value) = value {
+                std::env::remove_var(key);
+            }
+        }
+        for (key, value) in default_env {
+            std::env::set_var(key, value);
+        }
+
         tx.send(result).unwrap();
     });
+
     let result = rx.recv().unwrap();
     result
 }
