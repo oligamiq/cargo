@@ -1,5 +1,9 @@
 use std::{io::{Read as _, Write as _}, os::fd::AsRawFd as _};
 
+/// This is a simple implementation of capturing stdout/stderr/stdin.
+/// If used incorrectly, memory leaks can occur.
+/// Call stop_capture if the thread that did start_capture or its child threads,
+/// or get_stopped_capture if the thread failed
 #[derive(Debug)]
 pub struct StdoutCapturer {
     original_stdout_fd: i32,
@@ -107,6 +111,19 @@ impl StdoutCapturer {
         Ok(buf)
     }
 
+    pub fn get_stoped_capture(self) -> Result<Vec<u8>, std::io::Error> {
+        // close fd
+        drop(self.capture_file);
+
+        let mut buf = Vec::new();
+        std::fs::File::open(&self.capture_file_name)?.read_to_end(&mut buf)?;
+
+        // remove file
+        std::fs::remove_file(&self.capture_file_name)?;
+
+        Ok(buf)
+    }
+
 //     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
 //         let fd = self.original_stdout_fd;
 //         let offset = self.read_buf;
@@ -172,6 +189,16 @@ impl StdinCapturer {
 
         // don't close original stdin fd
         // but stdin is number so it won't be closed by drop
+
+        Ok(())
+    }
+
+    pub fn drop_stoped_capture(self) -> Result<(), std::io::Error> {
+        // close fd
+        drop(self.capture_file);
+
+        // remove file
+        std::fs::remove_file(&self.capture_file_name)?;
 
         Ok(())
     }

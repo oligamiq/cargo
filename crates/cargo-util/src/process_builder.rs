@@ -309,7 +309,9 @@ impl ProcessBuilder {
                     is_error,
                     stdout,
                     stderr,
-                } = rustc_runner::rustc_run_only(&cmd, self.stdin.clone());
+                } = rustc_runner::rustc_run(&cmd, self.stdin.clone()).map_err(|e| {
+                    io::Error::new(io::ErrorKind::Other, e.to_string())
+                })?;
 
                 if is_error {
                     return Err(io::Error::new(io::ErrorKind::Other, "rustc failed"));
