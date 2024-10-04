@@ -313,6 +313,10 @@ impl ProcessBuilder {
                     io::Error::new(io::ErrorKind::Other, e.to_string())
                 })?;
 
+                println!("is_error: {}", is_error);
+                println!("stdout: {}", String::from_utf8_lossy(&stdout));
+                println!("stderr: {}", String::from_utf8_lossy(&stderr));
+
                 if is_error {
                     return Err(io::Error::new(io::ErrorKind::Other, "rustc failed"));
                 }

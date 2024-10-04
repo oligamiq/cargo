@@ -124,13 +124,13 @@ pub fn rustc_run(
 
     let out = Arc::new(StdoutCapturer::new_stdout()?);
     let err = Arc::new(StdoutCapturer::new_stderr()?);
-    let mut r#in = Arc::new(StdinCapturer::new()?);
+    let mut r#in = Arc::new(Mutex::new(StdinCapturer::new()?));
 
     let ex_env_clone = ex_env.clone();
     let default_env_clone = default_env.clone();
-    let out_clone = Arc::clone(&out);
-    let err_clone = Arc::clone(&err);
-    let in_clone = Arc::clone(&r#in);
+    let out_weak_clone = Arc::downgrade(&out);
+    let err_weak_clone = Arc::downgrade(&err);
+    let in_weak_clone = Arc::downgrade(&r#in);
 
     let thread: thread::JoinHandle<anyhow::Result<(bool, Vec<u8>, Vec<u8>)>> = thread::spawn(move || {
         for (key, value) in &ex_env_clone {
@@ -154,11 +154,9 @@ pub fn rustc_run(
             vec![0x1A]
         };
 
-        out_clone.start_capture()?;
-        err_clone.start_capture()?;
-        if let Some(input) = input {
-            in_clone.set_stdin(&input)?;
-        }
+        out.start_capture()?;
+        err.start_capture()?;
+        r#in.lock().unwrap().set_stdin(&stdin)?;
 
         // run rustc
         let is_error = match rustc.run() {
@@ -175,9 +173,11 @@ pub fn rustc_run(
             std::env::set_var(key, value);
         }
 
-        let stdout = Arc::try_unwrap(out_clone).unwrap().stop_capture()?;
-        let stderr = Arc::try_unwrap(err_clone).unwrap().stop_capture()?;
-        Arc::try_unwrap(in_clone).unwrap().drop_stoped_capture()?;
+        let stdout = Arc::into_inner(out).unwrap().stop_capture()?;
+        let stderr = Arc::into_inner(err).unwrap().stop_capture()?;
+        Arc::into_inner(r#in).unwrap().into_inner().unwrap().stop_capture()?;
+
+        println!("Rustc finished");
 
         Ok((is_error, stdout, stderr))
     });
@@ -193,9 +193,18 @@ pub fn rustc_run(
                 std::env::set_var(key, value);
             }
 
-            let stdout = Arc::try_unwrap(out.clone()).unwrap().get_stoped_capture()?;
-            let stderr = Arc::try_unwrap(err.clone()).unwrap().get_stoped_capture()?;
-            Arc::try_unwrap(r#in.clone()).unwrap().drop_stoped_capture()?;
+            let stdout = Arc::into_inner(out_weak_clone.upgrade().unwrap()).unwrap().get_stoped_capture()?;
+            let stderr = Arc::into_inner(err_weak_clone.upgrade().unwrap()).unwrap().get_stoped_capture()?;
+            let r#in = Arc::into_inner(in_weak_clone.upgrade().unwrap()).unwrap();
+            r#in.clear_poison();
+            r#in.into_inner().unwrap().drop_stoped_capture()?;
+
+            println!("Thread failed");
+
+            // This is memory leak, but we can't do anything
+            // If drop is called, it will panic
+            // The main thread should end properly at the right time.
+            std::mem::forget(e);
 
             TaskResult {
                 is_error: true,
@@ -203,11 +212,23 @@ pub fn rustc_run(
                 stderr,
             }
         }
-        Ok(result) => result.map(|(is_error, stdout, stderr)| TaskResult {
-            is_error,
-            stdout,
-            stderr,
-        })?,
+        Ok(result) => {
+            println!("Thread finished");
+            println!("result: {:?}", result);
+
+            std::mem::drop(out_weak_clone);
+            println!("out_weak_clone dropped");
+            std::mem::drop(err_weak_clone);
+            println!("err_weak_clone dropped");
+            std::mem::drop(in_weak_clone);
+            println!("in_weak_clone dropped");
+
+            result.map(|(is_error, stdout, stderr)| TaskResult {
+                is_error,
+                stdout,
+                stderr,
+            })?
+        },
     })
 }
 
@@ -217,10 +238,16 @@ pub fn rustc_run_with_streaming(
     on_stderr_line: &mut dyn FnMut(&str) -> anyhow::Result<()>,
     capture_output: bool,
 ) -> anyhow::Result<Output> {
+    println!("Running rustc with streaming");
+
     let result = rustc_run(cmd, None)?;
+
+    println!("Rustc finished");
 
     let stdout = String::from_utf8_lossy(&result.stdout);
     let stderr = String::from_utf8_lossy(&result.stderr);
+
+    println!("stdout: {}", stdout);
 
     for line in stdout.lines() {
         on_stdout_line(line)?;
@@ -229,6 +256,8 @@ pub fn rustc_run_with_streaming(
     for line in stderr.lines() {
         on_stderr_line(line)?;
     }
+
+    println!("Rustc finished");
 
     if result.is_error {
         Err(anyhow::anyhow!(format!(

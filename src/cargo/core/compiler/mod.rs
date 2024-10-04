@@ -145,19 +145,8 @@ impl Executor for DefaultExecutor {
         on_stdout_line: &mut dyn FnMut(&str) -> CargoResult<()>,
         on_stderr_line: &mut dyn FnMut(&str) -> CargoResult<()>,
     ) -> CargoResult<()> {
-        #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
-        {
-            cmd.exec_with_streaming(on_stdout_line, on_stderr_line, false)
-            .map(drop)
-        }
-
-        #[cfg(all(target_os = "wasi", target_env = "p1"))]
-        {
-            let cmd = cmd.build_command();
-            println!("executing: {:?}", cmd);
-
-            panic!("wasi-p1 does not support executing commands");
-        }
+        cmd.exec_with_streaming(on_stdout_line, on_stderr_line, false)
+        .map(drop)
     }
 }
 

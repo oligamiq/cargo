@@ -8,6 +8,7 @@ use std::{io::{Read as _, Write as _}, os::fd::AsRawFd as _};
 pub struct StdoutCapturer {
     original_stdout_fd: i32,
     capture_file: std::fs::File,
+    // capture_file_fd: i32,
     capture_file_name: String,
 
     #[allow(dead_code)]
@@ -15,6 +16,7 @@ pub struct StdoutCapturer {
 }
 
 pub fn exchange_local_fd(from_fd: i32, to_fd: i32) -> Result<(), std::io::Error> {
+    // println!("exchange_local_fd({}, {})", from_fd, to_fd);
     let rand = rand::random::<u64>();
     let tmp_file = format!("/tmp/exchange_local_fd_{}", rand);
     let tmp_file_fd = std::fs::OpenOptions::new()
@@ -56,10 +58,15 @@ impl StdoutCapturer {
             .truncate(true)
             .open(&file_name)?;
 
+        // let capture_file_fd = capture_file.as_raw_fd();
+
+        // println!("capture_stdout_file_fd: {}", capture_file_fd);
+
         Ok(StdoutCapturer {
             read_buf: 0,
             original_stdout_fd: 1,
             capture_file,
+            // capture_file_fd,
             capture_file_name: file_name,
         })
     }
@@ -77,10 +84,15 @@ impl StdoutCapturer {
             .truncate(true)
             .open(&file_name)?;
 
+        // let capture_file_fd = capture_file.as_raw_fd();
+
+        // println!("capture_stderr_file_fd: {}", capture_file_fd);
+
         Ok(StdoutCapturer {
             read_buf: 0,
             original_stdout_fd: 2,
             capture_file,
+            // capture_file_fd,
             capture_file_name: file_name,
         })
     }
@@ -88,7 +100,7 @@ impl StdoutCapturer {
     pub fn start_capture(&self) -> Result<(), std::io::Error> {
         let fd = self.capture_file.as_raw_fd();
 
-        exchange_local_fd(1, fd)?;
+        exchange_local_fd(self.original_stdout_fd, fd)?;
 
         Ok(())
     }
@@ -166,12 +178,10 @@ impl StdinCapturer {
         })
     }
 
-    pub fn set_stdin(&self, input: &[u8]) -> Result<(), std::io::Error> {
-        let mut capture_file = self.capture_file.try_clone()?;
+    pub fn set_stdin(&mut self, input: &[u8]) -> Result<(), std::io::Error> {
+        self.capture_file.write_all(input)?;
 
-        capture_file.write_all(input)?;
-
-        let fd = capture_file.as_raw_fd();
+        let fd = self.capture_file.as_raw_fd();
 
         exchange_local_fd(0, fd)?;
 
