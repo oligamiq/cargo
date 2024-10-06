@@ -106,5 +106,32 @@ pub fn run(
 
     gctx.shell().status("Running", process.to_string())?;
 
-    process.exec_replace()
+    #[cfg(not(all(target_os = "wasi", target_env = "p1")))] {
+        process.exec_replace()
+    }
+    #[cfg(all(target_os = "wasi", target_env = "p1"))] {
+        let args = vec![process.get_program().to_string_lossy().to_string()]
+            .into_iter()
+            .chain(process.get_args().map(|arg| arg.to_string_lossy().to_string()))
+            .collect::<Vec<_>>();
+
+        // stdin is not captured because I tired.
+
+        // wasm32-wasip1, wasm32-wasip1-threads
+        use crate::core::compiler::CompileKind;
+
+        let target = match options.build_config.requested_kinds.iter().filter(|&k| match k {
+            CompileKind::Host => true,
+            CompileKind::Target(t) => {
+                t.short_name() == "wasm32-wasip1" || t.short_name() == "wasm32-wasip1-threads"
+            },
+        }).next() {
+            Some(CompileKind::Target(t)) => t.short_name(),
+            _ => "wasm32-wasip1",
+        };
+        if rustc_runner::wasm_run(args, vec![], target.to_owned()) {
+            anyhow::bail!("Error running the program");
+        }
+        Ok(())
+    }
 }

@@ -436,23 +436,28 @@ mod sys {
     use std::io::{Error, Result};
 
     pub(super) fn lock_shared(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        // Err(Error::from_raw_os_error(libc::ENOSYS))
+        Ok(())
     }
 
     pub(super) fn lock_exclusive(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        // Err(Error::from_raw_os_error(libc::ENOSYS))
+        Ok(())
     }
 
     pub(super) fn try_lock_shared(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        // Err(Error::from_raw_os_error(libc::ENOSYS))
+        Ok(())
     }
 
     pub(super) fn try_lock_exclusive(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        // Err(Error::from_raw_os_error(libc::ENOSYS))
+        Ok(())
     }
 
     pub(super) fn unlock(file: &File) -> Result<()> {
-        Err(Error::from_raw_os_error(libc::ENOSYS))
+        // Err(Error::from_raw_os_error(libc::ENOSYS))
+        Ok(())
     }
 
     pub(super) fn error_contended(err: &Error) -> bool {
@@ -460,7 +465,8 @@ mod sys {
     }
 
     pub(super) fn error_unsupported(err: &Error) -> bool {
-        true
+        // true
+        false
     }
 }
 

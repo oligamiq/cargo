@@ -1,4 +1,4 @@
-use std::{io::{Read as _, Write as _}, os::fd::AsRawFd as _};
+use std::{io::{Read as _, Seek, Write as _}, os::fd::AsRawFd as _};
 
 /// This is a simple implementation of capturing stdout/stderr/stdin.
 /// If used incorrectly, memory leaks can occur.
@@ -180,6 +180,10 @@ impl StdinCapturer {
 
     pub fn set_stdin(&mut self, input: &[u8]) -> Result<(), std::io::Error> {
         self.capture_file.write_all(input)?;
+
+        self.capture_file.flush()?;
+
+        self.capture_file.seek(std::io::SeekFrom::Start(0))?;
 
         let fd = self.capture_file.as_raw_fd();
 

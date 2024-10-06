@@ -13,10 +13,12 @@ path = "lib.rs"
 [dependencies]
 
 [target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
-rustc_driver.workspace = true
-rustc_driver_impl.workspace = true
+# rustc_driver.workspace = true
+# rustc_driver_impl.workspace = true
 capture_io.workspace = true
 anyhow.workspace = true
+log = "0.4"
+serde_json.workspace = true
 
 [lints]
 workspace = true

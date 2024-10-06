@@ -35,8 +35,8 @@ cargo-test-support = { version = "0.4.0", path = "crates/cargo-test-support" }
 cargo-util = { version = "0.2.14", path = "crates/cargo-util" }
 cargo-util-schemas = { version = "0.6.0", path = "crates/cargo-util-schemas" }
 cargo_metadata = "0.18.1"
-clap = { git = "https://github.com/oligamiq/clap" }
-clap_complete = { git = "https://github.com/oligamiq/clap", features = ["unstable-dynamic"] }
+clap = "=4.5.17"
+clap_complete = { version = "=4.5.28", features = ["unstable-dynamic"] }
 color-print = "0.3.6"
 completest-pty = "0.5.3"
 core-foundation = { version = "0.10.0", features = ["mac_os_10_7_support"] }
@@ -250,10 +250,11 @@ git2-curl.workspace = true
 
 [target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
 fetch.workspace = true
-rustc_driver.workspace = true
-rustc_driver_impl.workspace = true
+# rustc_driver.workspace = true
+# rustc_driver_impl.workspace = true
 capture_io.workspace = true
 libc.workspace = true
+rustc_runner.workspace = true
 
 [dev-dependencies]
 annotate-snippets = { workspace = true, features = ["testing-colors"] }
@@ -280,3 +281,6 @@ all-static = ['vendored-openssl', 'curl/static-curl', 'curl/force-system-lib-on-
 
 [lints]
 workspace = true
+
+[profile.release]
+panic = 'unwind'

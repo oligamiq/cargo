@@ -1,7 +1,8 @@
 use std::{process::{Command, ExitStatus, Output}, sync::{Arc, LazyLock, Mutex}, thread};
 
 use capture_io::{StdinCapturer, StdoutCapturer};
-use rustc_driver::{Callbacks, RunCompiler};
+use log::LevelFilter;
+// use rustc_driver::{Callbacks, RunCompiler};
 
 pub struct Task {
     input: Option<Vec<u8>>,
@@ -14,8 +15,8 @@ pub struct TaskResult {
     pub stderr: Vec<u8>,
 }
 
-struct NoneCallbacks;
-impl Callbacks for NoneCallbacks {}
+// struct NoneCallbacks;
+// impl Callbacks for NoneCallbacks {}
 
 fn default_panic_callback(
     stdout: Vec<u8>,
@@ -28,6 +29,30 @@ fn default_panic_callback(
     println!("stderr: {}", stderr);
 
     Ok(())
+}
+
+pub fn wasm_run(
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+    target: String,
+) -> bool {
+    #[link(wasm_import_module = "extend_imports")]
+    extern "C" {
+        fn wasm_run(json_ptr: *const u8, json_len: usize) -> i32;
+    }
+
+    let value = serde_json::json!({
+        "args": args,
+        "env": [],
+        "target": target,
+    });
+    let json = serde_json::to_string(&value).unwrap();
+    let json_ptr = json.as_ptr();
+    let json_len = json.len();
+
+    let is_error = unsafe { wasm_run(json_ptr, json_len) } != 0;
+
+    is_error
 }
 
 pub fn rustc_run(
@@ -115,91 +140,40 @@ pub fn rustc_run(
         }
     }
 
-    let task = Task {
-        input,
-        args,
+    println!("Running rustc with args: {:?}", &args);
+
+    let out = StdoutCapturer::new_stdout()?;
+    let err = StdoutCapturer::new_stderr()?;
+    let mut r#in = StdinCapturer::new()?;
+
+    let stdin = if let Some(stdin) = input.clone() {
+        [stdin, vec![]].concat()
+    } else {
+        // return EOF
+        vec![]
     };
 
-    println!("Running rustc with args: {:?}", task.args);
+    // println!("&&&& Running rustc, envs: {:?}", std::env::vars().collect::<Vec<_>>());
 
-    let out = Arc::new(StdoutCapturer::new_stdout()?);
-    let err = Arc::new(StdoutCapturer::new_stderr()?);
-    let mut r#in = Arc::new(Mutex::new(StdinCapturer::new()?));
+    out.start_capture()?;
+    err.start_capture()?;
+    r#in.set_stdin(&stdin)?;
 
-    let ex_env_clone = ex_env.clone();
-    let default_env_clone = default_env.clone();
-    let out_weak_clone = Arc::downgrade(&out);
-    let err_weak_clone = Arc::downgrade(&err);
-    let in_weak_clone = Arc::downgrade(&r#in);
+    let thread: thread::JoinHandle<anyhow::Result<bool>> = thread::spawn(move || {
 
-    let thread: thread::JoinHandle<anyhow::Result<(bool, Vec<u8>, Vec<u8>)>> = thread::spawn(move || {
-        for (key, value) in &ex_env_clone {
-            if let Some(value) = value {
-                std::env::set_var(key, value);
-            } else {
-                std::env::remove_var(key);
-            }
-        }
+        // println!("&&&& Rustc finished");
+        let is_error = wasm_run(args, vec![], "wasm32-wasip1-threads".to_string());
 
-        let Task { input, args } = task;
-
-        let mut callbacks = NoneCallbacks;
-
-        let rustc = RunCompiler::new(&args, &mut callbacks);
-
-        let stdin = if let Some(stdin) = input.clone() {
-            [stdin, vec![0x1A]].concat()
-        } else {
-            // return EOF
-            vec![0x1A]
-        };
-
-        out.start_capture()?;
-        err.start_capture()?;
-        r#in.lock().unwrap().set_stdin(&stdin)?;
-
-        // run rustc
-        let is_error = match rustc.run() {
-            Ok(_) => false,
-            Err(_) => true,
-        };
-
-        for (key, value) in &ex_env_clone {
-            if let Some(value) = value {
-                std::env::remove_var(key);
-            }
-        }
-        for (key, value) in default_env_clone {
-            std::env::set_var(key, value);
-        }
-
-        let stdout = Arc::into_inner(out).unwrap().stop_capture()?;
-        let stderr = Arc::into_inner(err).unwrap().stop_capture()?;
-        Arc::into_inner(r#in).unwrap().into_inner().unwrap().stop_capture()?;
-
-        println!("Rustc finished");
-
-        Ok((is_error, stdout, stderr))
+        Ok(is_error)
     });
 
     Ok(match thread.join() {
         Err(e) => {
-            for (key, value) in &ex_env {
-                if let Some(value) = value {
-                    std::env::remove_var(key);
-                }
-            }
-            for (key, value) in default_env {
-                std::env::set_var(key, value);
-            }
+            let stdout = out.stop_capture()?;
+            let stderr = err.stop_capture()?;
+            r#in.stop_capture()?;
 
-            let stdout = Arc::into_inner(out_weak_clone.upgrade().unwrap()).unwrap().get_stoped_capture()?;
-            let stderr = Arc::into_inner(err_weak_clone.upgrade().unwrap()).unwrap().get_stoped_capture()?;
-            let r#in = Arc::into_inner(in_weak_clone.upgrade().unwrap()).unwrap();
-            r#in.clear_poison();
-            r#in.into_inner().unwrap().drop_stoped_capture()?;
-
-            println!("Thread failed");
+            println!("&&&& Thread failed");
 
             // This is memory leak, but we can't do anything
             // If drop is called, it will panic
@@ -213,21 +187,21 @@ pub fn rustc_run(
             }
         }
         Ok(result) => {
-            println!("Thread finished");
-            println!("result: {:?}", result);
+            // println!("result: {:?}", result);
 
-            std::mem::drop(out_weak_clone);
-            println!("out_weak_clone dropped");
-            std::mem::drop(err_weak_clone);
-            println!("err_weak_clone dropped");
-            std::mem::drop(in_weak_clone);
-            println!("in_weak_clone dropped");
+            let stdout = out.stop_capture()?;
+            let stderr = err.stop_capture()?;
+            r#in.stop_capture()?;
 
-            result.map(|(is_error, stdout, stderr)| TaskResult {
-                is_error,
+            println!("&&&& Thread finished");
+
+            let result = result?;
+
+            TaskResult {
+                is_error: result,
                 stdout,
                 stderr,
-            })?
+            }
         },
     })
 }
@@ -250,11 +224,15 @@ pub fn rustc_run_with_streaming(
     println!("stdout: {}", stdout);
 
     for line in stdout.lines() {
-        on_stdout_line(line)?;
+        if line.starts_with("{") {
+            on_stdout_line(line)?;
+        }
     }
 
     for line in stderr.lines() {
-        on_stderr_line(line)?;
+        if line.starts_with("{") {
+            on_stderr_line(line)?;
+        }
     }
 
     println!("Rustc finished");
