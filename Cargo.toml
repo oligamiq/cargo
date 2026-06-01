@@ -249,7 +249,6 @@ unicode-ident.workspace = true
 url.workspace = true
 walkdir.workspace = true
 winnow.workspace = true
-wit-bindgen = { version = "0.57.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
@@ -305,7 +304,6 @@ doc = false
 
 [features]
 default = []
-wit-bindgen = ["dep:wit-bindgen"]
 
 [lints]
 workspace = true

@@ -398,8 +398,13 @@ pub fn path2bytes(path: &Path) -> Result<&[u8]> {
     }
     #[cfg(target_os = "wasi")]
     {
-        use std::os::wasi::ffi::OsStrExt;
-        Ok(path.as_os_str().as_bytes())
+        match path.as_os_str().to_str() {
+            Some(s) => Ok(s.as_bytes()),
+            None => Err(anyhow::format_err!(
+                "invalid non-unicode path: {}",
+                path.display()
+            )),
+        }
     }
     #[cfg(windows)]
     {
@@ -422,8 +427,11 @@ pub fn bytes2path(bytes: &[u8]) -> Result<PathBuf> {
     }
     #[cfg(target_os = "wasi")]
     {
-        use std::os::wasi::ffi::OsStrExt;
-        Ok(PathBuf::from(OsStr::from_bytes(bytes)))
+        use std::str;
+        match str::from_utf8(bytes) {
+            Ok(s) => Ok(PathBuf::from(s)),
+            Err(..) => Err(anyhow::format_err!("invalid non-unicode path")),
+        }
     }
     #[cfg(windows)]
     {
@@ -635,16 +643,8 @@ fn _link_or_copy(src: &Path, dst: &Path) -> Result<()> {
         #[cfg(unix)]
         use std::os::unix::fs::symlink;
         #[cfg(target_os = "wasi")]
-        let symlink = |src: &Path, dst: &Path| -> io::Result<()> {
-            use std::os::wasi::fs::symlink as wasi_symlink;
-            let parent = dst.parent().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Other, "destination has no parent directory")
-            })?;
-            let parent_fd = fs::File::open(parent)?;
-            let name = dst.file_name().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Other, "destination has no file name")
-            })?;
-            wasi_symlink(src, &parent_fd, name)
+        let symlink = |_src: &Path, _dst: &Path| -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "symlinking is not supported on WASI"))
         };
         #[cfg(windows)]
         // FIXME: This should probably panic or have a copy fallback. Symlinks
