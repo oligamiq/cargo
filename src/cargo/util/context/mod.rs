@@ -85,7 +85,10 @@ use crate::sources::CRATES_IO_REGISTRY;
 use crate::util::OnceExt as _;
 use crate::util::cache_lock::{CacheLock, CacheLockMode, CacheLocker};
 use crate::util::errors::CargoResult;
+#[cfg(not(target_os = "wasi"))]
 use crate::util::network::http::{HandleConfiguration, configure_http_handle, http_handle};
+#[cfg(target_os = "wasi")]
+use crate::util::network::http::HandleConfiguration;
 use crate::util::network::http_async;
 use crate::util::restricted_names::is_glob_pattern;
 use crate::util::{CanonicalUrl, closest_msg, internal};
@@ -97,6 +100,7 @@ use cargo_util::paths;
 use cargo_util_schemas::manifest::RegistryName;
 use cargo_util_terminal::report::Level;
 use cargo_util_terminal::{Shell, Verbosity};
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::Easy;
 use itertools::Itertools;
 use serde::Deserialize;
@@ -245,6 +249,7 @@ pub struct GlobalContext {
     /// Cli flags of the form "-Z something"
     unstable_flags_cli: Option<Vec<String>>,
     /// A handle on curl easy mode for http calls
+    #[cfg(not(target_os = "wasi"))]
     easy: OnceLock<Mutex<Easy>>,
     /// Cache of the `SourceId` for crates.io
     crates_io_source_id: OnceLock<SourceId>,
@@ -373,10 +378,12 @@ impl GlobalContext {
             locked: false,
             offline: false,
             jobserver,
-            unstable_flags: CliUnstable::default(),
+            unstable_flags: Default::default(),
             unstable_flags_cli: None,
+            #[cfg(not(target_os = "wasi"))]
             easy: Default::default(),
             crates_io_source_id: Default::default(),
+
             cache_rustc_info,
             creation_time: Instant::now(),
             target_dir: None,
@@ -1907,6 +1914,7 @@ impl GlobalContext {
         self.jobserver
     }
 
+    #[cfg(not(target_os = "wasi"))]
     pub fn http(&self) -> CargoResult<&Mutex<Easy>> {
         let http = self
             .easy
@@ -1930,8 +1938,11 @@ impl GlobalContext {
     pub fn http_config(&self) -> CargoResult<&CargoHttpConfig> {
         self.http_config.try_borrow_with(|| {
             let mut http = self.get::<CargoHttpConfig>("http")?;
-            let curl_v = curl::Version::get();
-            disables_multiplexing_for_bad_curl(curl_v.version(), &mut http, self);
+            #[cfg(not(target_os = "wasi"))]
+            {
+                let curl_v = curl::Version::get();
+                disables_multiplexing_for_bad_curl(curl_v.version(), &mut http, self);
+            }
             Ok(http)
         })
     }

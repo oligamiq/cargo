@@ -21,6 +21,9 @@ use std::path::Path;
 use std::str;
 use tracing::{debug, trace};
 
+#[cfg(target_os = "wasi")]
+use crate::sources::git::utils::wasi_stub::{Oid, Repository, Tree};
+
 /// A remote registry is a registry that lives at a remote URL (such as
 /// crates.io). The git index is cloned locally, and `.crate` files are
 /// downloaded as needed and cached locally.
@@ -67,11 +70,20 @@ pub struct RemoteRegistry<'gctx> {
     /// during each call into `load()`.
     ///
     /// [tree object]: https://git-scm.com/book/en/v2/Git-Internals-Git-Objects#_tree_objects
+    #[cfg(not(target_os = "wasi"))]
     tree: RefCell<Option<git2::Tree<'static>>>,
+    #[cfg(target_os = "wasi")]
+    tree: RefCell<Option<Tree>>,
     /// A Git repository that contains the actual index we want.
+    #[cfg(not(target_os = "wasi"))]
     repo: RefCell<Option<git2::Repository>>,
+    #[cfg(target_os = "wasi")]
+    repo: RefCell<Option<Repository>>,
     /// The current HEAD commit of the underlying Git repository.
+    #[cfg(not(target_os = "wasi"))]
     head: Cell<Option<git2::Oid>>,
+    #[cfg(target_os = "wasi")]
+    head: Cell<Option<Oid>>,
     /// This stores sha value of the current HEAD commit for convenience.
     current_sha: Cell<Option<InternedString>>,
     /// Whether this registry needs to update package information.
@@ -110,6 +122,7 @@ impl<'gctx> RemoteRegistry<'gctx> {
     }
 
     /// Creates intermediate dirs and initialize the repository.
+    #[cfg(not(target_os = "wasi"))]
     fn repo(&self) -> CargoResult<Ref<'_, Option<git2::Repository>>> {
         if self.repo.borrow().is_none() {
             trace!("acquiring registry index lock");
@@ -150,8 +163,31 @@ impl<'gctx> RemoteRegistry<'gctx> {
         Ok(self.repo.borrow())
     }
 
+    #[cfg(target_os = "wasi")]
+    fn repo(&self) -> CargoResult<Ref<'_, Option<Repository>>> {
+        if self.repo.borrow().is_none() {
+            let path = self
+                .gctx
+                .assert_package_cache_locked(CacheLockMode::DownloadExclusive, &self.index_path);
+            self.repo.replace(Some(Repository::open(&path)?));
+        }
+        Ok(self.repo.borrow())
+    }
+
     /// Get the object ID of the HEAD commit from the underlying Git repository.
+    #[cfg(not(target_os = "wasi"))]
     fn head(&self) -> CargoResult<git2::Oid> {
+        if self.head.get().is_none() {
+            let repo = self.repo()?;
+            let repo = repo.as_ref().unwrap();
+            let oid = resolve_ref(&self.index_git_ref, repo)?;
+            self.head.set(Some(oid));
+        }
+        Ok(self.head.get().unwrap())
+    }
+
+    #[cfg(target_os = "wasi")]
+    fn head(&self) -> CargoResult<Oid> {
         if self.head.get().is_none() {
             let repo = self.repo()?;
             let repo = repo.as_ref().unwrap();
@@ -163,6 +199,7 @@ impl<'gctx> RemoteRegistry<'gctx> {
 
     /// Returns a [`git2::Tree`] object of the current HEAD commit of the
     /// underlying Git repository.
+    #[cfg(not(target_os = "wasi"))]
     fn tree(&self) -> CargoResult<Ref<'_, git2::Tree<'_>>> {
         {
             let tree = self.tree.borrow();
@@ -190,6 +227,18 @@ impl<'gctx> RemoteRegistry<'gctx> {
         // `RemoteRegistry` below.
         let tree = unsafe { mem::transmute::<git2::Tree<'_>, git2::Tree<'static>>(tree) };
         *self.tree.borrow_mut() = Some(tree);
+        Ok(Ref::map(self.tree.borrow(), |s| s.as_ref().unwrap()))
+    }
+
+    #[cfg(target_os = "wasi")]
+    fn tree(&self) -> CargoResult<Ref<'_, Tree>> {
+        if self.tree.borrow().is_none() {
+            let repo = self.repo()?;
+            let repo = repo.as_ref().unwrap();
+            let commit = repo.find_commit(self.head()?)?;
+            let tree = commit.tree()?;
+            *self.tree.borrow_mut() = Some(tree);
+        }
         Ok(Ref::map(self.tree.borrow(), |s| s.as_ref().unwrap()))
     }
 
@@ -246,6 +295,7 @@ impl<'gctx> RemoteRegistry<'gctx> {
         //
         // This way if there's a problem the error gets printed before we even
         // hit the index, which may not actually read this configuration.
+        #[cfg(not(target_os = "wasi"))]
         self.gctx.http()?;
 
         self.prepare()?;
@@ -376,15 +426,19 @@ impl<'gctx> RegistryData for RemoteRegistry<'gctx> {
                     self.update()?;
                     continue;
                 }
-                Err(e)
-                    if e.downcast_ref::<git2::Error>()
-                        .map(|e| e.code() == git2::ErrorCode::NotFound)
-                        .unwrap_or_default() =>
-                {
-                    // The repo has been updated and the file does not exist.
-                    Ok(LoadResponse::NotFound)
+                Err(e) => {
+                    #[cfg(not(target_os = "wasi"))]
+                    if let Some(ge) = e.downcast_ref::<git2::Error>() {
+                        if ge.code() == git2::ErrorCode::NotFound {
+                            return Ok(LoadResponse::NotFound);
+                        }
+                    }
+                    #[cfg(target_os = "wasi")]
+                    if e.to_string().contains("NotFound") {
+                         return Ok(LoadResponse::NotFound);
+                    }
+                    Err(e)
                 }
-                Err(e) => Err(e),
             };
         }
     }

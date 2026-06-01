@@ -396,6 +396,11 @@ pub fn path2bytes(path: &Path) -> Result<&[u8]> {
         use std::os::unix::prelude::*;
         Ok(path.as_os_str().as_bytes())
     }
+    #[cfg(target_os = "wasi")]
+    {
+        use std::os::wasi::ffi::OsStrExt;
+        Ok(path.as_os_str().as_bytes())
+    }
     #[cfg(windows)]
     {
         match path.as_os_str().to_str() {
@@ -413,6 +418,11 @@ pub fn bytes2path(bytes: &[u8]) -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::prelude::*;
+        Ok(PathBuf::from(OsStr::from_bytes(bytes)))
+    }
+    #[cfg(target_os = "wasi")]
+    {
+        use std::os::wasi::ffi::OsStrExt;
         Ok(PathBuf::from(OsStr::from_bytes(bytes)))
     }
     #[cfg(windows)]
@@ -624,6 +634,18 @@ fn _link_or_copy(src: &Path, dst: &Path) -> Result<()> {
     let link_result = if src.is_dir() {
         #[cfg(unix)]
         use std::os::unix::fs::symlink;
+        #[cfg(target_os = "wasi")]
+        let symlink = |src: &Path, dst: &Path| -> io::Result<()> {
+            use std::os::wasi::fs::symlink as wasi_symlink;
+            let parent = dst.parent().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Other, "destination has no parent directory")
+            })?;
+            let parent_fd = fs::File::open(parent)?;
+            let name = dst.file_name().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Other, "destination has no file name")
+            })?;
+            wasi_symlink(src, &parent_fd, name)
+        };
         #[cfg(windows)]
         // FIXME: This should probably panic or have a copy fallback. Symlinks
         // are not supported in all windows environments. Currently symlinking

@@ -707,6 +707,20 @@ mod imp {
     }
 }
 
+#[cfg(not(any(unix, windows)))]
+mod imp {
+    use super::{Shell, TtyWidth};
+
+    pub fn stderr_width() -> TtyWidth {
+        TtyWidth::NoTty
+    }
+
+    pub fn err_erase_line(shell: &mut Shell) {
+        // Try ANSI escape sequence as a best effort
+        let _ = shell.output.stderr().write_all(b"\x1B[K");
+    }
+}
+
 #[cfg(windows)]
 fn default_err_erase_line(shell: &mut Shell) {
     match imp::stderr_width() {

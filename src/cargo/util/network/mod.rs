@@ -11,6 +11,7 @@ pub mod http;
 pub mod http_async;
 pub mod proxy;
 pub mod retry;
+pub mod wasi_http;
 
 /// LOCALHOST constants for both IPv4 and IPv6.
 pub const LOCALHOST: [SocketAddr; 2] = [
@@ -37,16 +38,19 @@ impl<T> PollExt<T> for Poll<T> {
 #[macro_export]
 macro_rules! try_old_curl {
     ($e:expr, $msg:expr) => {
-        let result = $e;
-        if cfg!(target_os = "macos") {
-            if let Err(e) = result {
-                ::tracing::warn!(target: "network", "ignoring libcurl {} error: {}", $msg, e);
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let result = $e;
+            if cfg!(target_os = "macos") {
+                if let Err(e) = result {
+                    ::tracing::warn!(target: "network", "ignoring libcurl {} error: {}", $msg, e);
+                }
+            } else {
+                if let Err(e) = &result {
+                    ::tracing::error!(target: "network", "failed to enable {}, is curl not built right? error: {}", $msg, e);
+                }
+                result?;
             }
-        } else {
-            if let Err(e) = &result {
-                ::tracing::error!(target: "network", "failed to enable {}, is curl not built right? error: {}", $msg, e);
-            }
-            result?;
         }
     };
 }
@@ -72,11 +76,14 @@ macro_rules! try_old_curl {
 #[macro_export]
 macro_rules! try_old_curl_http2_pipewait {
     ($multiplexing:expr, $handle:expr) => {
-        if $multiplexing {
-            $crate::try_old_curl!($handle.http_version(curl::easy::HttpVersion::V2), "HTTP/2");
-        } else {
-            $handle.http_version(curl::easy::HttpVersion::V11)?;
+        #[cfg(not(target_os = "wasi"))]
+        {
+            if $multiplexing {
+                $crate::try_old_curl!($handle.http_version(curl::easy::HttpVersion::V2), "HTTP/2");
+            } else {
+                $handle.http_version(curl::easy::HttpVersion::V11)?;
+            }
+            $crate::try_old_curl!($handle.pipewait(true), "pipewait");
         }
-        $crate::try_old_curl!($handle.pipewait(true), "pipewait");
     };
 }

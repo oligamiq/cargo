@@ -12,7 +12,7 @@ pub use self::utils::{GitCheckout, GitDatabase, GitRemote, fetch, resolve_ref};
 mod known_hosts;
 mod oxide;
 mod source;
-mod utils;
+pub mod utils;
 
 /// For `-Zgitoxide` integration.
 pub mod fetch {

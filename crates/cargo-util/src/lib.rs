@@ -5,6 +5,7 @@
 //! > crate may make major changes to its APIs or be deprecated without warning.
 
 #![allow(clippy::disallowed_methods)]
+#![feature(wasi_ext)]
 
 pub use self::read2::read2;
 pub use du::du;

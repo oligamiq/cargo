@@ -32,11 +32,37 @@ pub struct FossilRepo;
 
 impl GitRepo {
     pub fn init(path: &Path, _: &Path) -> CargoResult<GitRepo> {
-        git2::Repository::init(path)?;
-        Ok(GitRepo)
+        #[cfg(not(target_os = "wasi"))]
+        {
+            git2::Repository::init(path)?;
+            Ok(GitRepo)
+        }
+        #[cfg(target_os = "wasi")]
+        {
+            let _ = path;
+            anyhow::bail!("git is not supported on WASI")
+        }
     }
+    #[cfg(not(target_os = "wasi"))]
     pub fn discover(path: &Path, _: &Path) -> Result<git2::Repository, git2::Error> {
         git2::Repository::discover(path)
+    }
+    #[cfg(target_os = "wasi")]
+    pub fn discover(path: &Path, _: &Path) -> Result<FakeRepo, anyhow::Error> {
+        let _ = path;
+        anyhow::bail!("git is not supported on WASI")
+    }
+}
+
+#[cfg(target_os = "wasi")]
+pub struct FakeRepo;
+#[cfg(target_os = "wasi")]
+impl FakeRepo {
+    pub fn workdir(&self) -> Option<&Path> {
+        None
+    }
+    pub fn is_path_ignored(&self, _: &Path) -> Result<bool, anyhow::Error> {
+        Ok(false)
     }
 }
 

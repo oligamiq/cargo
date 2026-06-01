@@ -5,10 +5,15 @@ use std::str;
 use std::time::Duration;
 
 use anyhow::bail;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::Easy;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::Easy2;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::InfoType;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::SslOpt;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::SslVersion;
 use tracing::debug;
 use tracing::trace;
@@ -19,12 +24,14 @@ use crate::util::context::SslVersionConfig;
 use crate::util::context::SslVersionConfigRange;
 
 /// Creates a new HTTP handle with appropriate global configuration for cargo.
+#[cfg(not(target_os = "wasi"))]
 pub fn http_handle(gctx: &GlobalContext) -> CargoResult<Easy> {
     let (mut handle, timeout) = http_handle_and_timeout(gctx)?;
     timeout.configure(&mut handle)?;
     Ok(handle)
 }
 
+#[cfg(not(target_os = "wasi"))]
 pub fn http_handle_and_timeout(gctx: &GlobalContext) -> CargoResult<(Easy, HttpTimeout)> {
     // The timeout option for libcurl by default times out the entire transfer,
     // but we probably don't want this. Instead we only set timeouts for the
@@ -46,18 +53,22 @@ pub fn needs_custom_http_transport(gctx: &GlobalContext) -> CargoResult<bool> {
 }
 /// Configure a libcurl http handle with the defaults options for Cargo
 pub struct HandleConfiguration {
-    proxy: Option<String>,
-    cainfo: Option<PathBuf>,
-    proxy_cainfo: Option<String>,
+    pub proxy: Option<String>,
+    pub cainfo: Option<PathBuf>,
+    pub proxy_cainfo: Option<String>,
+    #[cfg(not(target_os = "wasi"))]
     ssl_options: Option<SslOpt>,
-    useragent: String,
+    pub useragent: String,
+    #[cfg(not(target_os = "wasi"))]
     ssl_version: Option<SslVersion>,
+    #[cfg(not(target_os = "wasi"))]
     ssl_min_max_version: Option<(SslVersion, SslVersion)>,
     pub timeout: HttpTimeout,
     pub verbose: bool,
     pub multiplexing: bool,
 }
 
+#[cfg(not(target_os = "wasi"))]
 pub fn configure_http_handle(gctx: &GlobalContext, handle: &mut Easy) -> CargoResult<HttpTimeout> {
     let configuration = HandleConfiguration::new(gctx)?;
     configuration.configure(handle)?;
@@ -85,9 +96,12 @@ impl HandleConfiguration {
             proxy: None,
             cainfo: None,
             proxy_cainfo: None,
+            #[cfg(not(target_os = "wasi"))]
             ssl_options: None,
             useragent,
+            #[cfg(not(target_os = "wasi"))]
             ssl_version: None,
+            #[cfg(not(target_os = "wasi"))]
             ssl_min_max_version: None,
             verbose: false,
             timeout,
@@ -105,12 +119,14 @@ impl HandleConfiguration {
             let proxy_cainfo = proxy_cainfo.resolve_path(gctx);
             handle.proxy_cainfo = Some(format!("{}", proxy_cainfo.display()));
         }
+        #[cfg(not(target_os = "wasi"))]
         if let Some(check) = http.check_revoke {
             let mut v = SslOpt::new();
             v.no_revoke(!check);
             handle.ssl_options = Some(v);
         }
 
+        #[cfg(not(target_os = "wasi"))]
         fn to_ssl_version(s: &str) -> CargoResult<SslVersion> {
             let version = match s {
                 "default" => SslVersion::Default,
@@ -127,6 +143,7 @@ impl HandleConfiguration {
             Ok(version)
         }
 
+        #[cfg(not(target_os = "wasi"))]
         if let Some(ssl_version) = &http.ssl_version {
             match ssl_version {
                 SslVersionConfig::Single(s) => {
@@ -143,23 +160,11 @@ impl HandleConfiguration {
                     handle.ssl_min_max_version = Some((min_version, max_version));
                 }
             }
-        } else if cfg!(windows) {
+        }
+        #[cfg(not(target_os = "wasi"))]
+        if handle.ssl_min_max_version.is_none() && cfg!(windows) {
             // This is a temporary workaround for some bugs with libcurl and
             // schannel and TLS 1.3.
-            //
-            // Our libcurl on Windows is usually built with schannel.
-            // On Windows 11 (or Windows Server 2022), libcurl recently (late
-            // 2022) gained support for TLS 1.3 with schannel, and it now defaults
-            // to 1.3. Unfortunately there have been some bugs with this.
-            // https://github.com/curl/curl/issues/9431 is the most recent. Once
-            // that has been fixed, and some time has passed where we can be more
-            // confident that the 1.3 support won't cause issues, this can be
-            // removed.
-            //
-            // Windows 10 is unaffected. libcurl does not support TLS 1.3 on
-            // Windows 10. (Windows 10 sorta had support, but it required enabling
-            // an advanced option in the registry which was buggy, and libcurl
-            // does runtime checks to prevent it.)
             handle.ssl_min_max_version = Some((SslVersion::Default, SslVersion::Tlsv12));
         }
 
@@ -170,6 +175,7 @@ impl HandleConfiguration {
         Ok(handle)
     }
 
+    #[cfg(not(target_os = "wasi"))]
     pub fn configure(&self, handle: &mut Easy) -> Result<(), curl::Error> {
         if let Some(v) = &self.proxy {
             handle.proxy(&v)?;
@@ -200,6 +206,7 @@ impl HandleConfiguration {
         Ok(())
     }
 
+    #[cfg(not(target_os = "wasi"))]
     pub fn configure2<T>(&self, handle: &mut Easy2<T>) -> Result<(), curl::Error> {
         if let Some(v) = &self.proxy {
             handle.proxy(&v)?;
@@ -233,6 +240,7 @@ impl HandleConfiguration {
     }
 }
 
+#[cfg(not(target_os = "wasi"))]
 pub(crate) fn debug(kind: InfoType, data: &[u8]) {
     enum LogLevel {
         Debug,
@@ -308,6 +316,7 @@ impl HttpTimeout {
         })
     }
 
+    #[cfg(not(target_os = "wasi"))]
     pub fn configure(&self, handle: &mut Easy) -> CargoResult<()> {
         // The timeout option for libcurl by default times out the entire
         // transfer, but we probably don't want this. Instead we only set
@@ -320,6 +329,7 @@ impl HttpTimeout {
         Ok(())
     }
 
+    #[cfg(not(target_os = "wasi"))]
     pub fn configure2<T>(&self, handle: &mut Easy2<T>) -> Result<(), curl::Error> {
         // The timeout option for libcurl by default times out the entire
         // transfer, but we probably don't want this. Instead we only set

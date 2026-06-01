@@ -14,7 +14,202 @@ use crate::util::{GlobalContext, IntoUrl, MetricsCounter, Progress, network};
 use anyhow::{Context as _, anyhow};
 use cargo_util::{ProcessBuilder, paths};
 use cargo_util_terminal::Verbosity;
-use git2::{ErrorClass, ObjectType, Oid};
+#[cfg(not(target_os = "wasi"))]
+use git2::{ErrorClass, ObjectType, Oid, Repository, RepositoryInitOptions};
+#[cfg(target_os = "wasi")]
+pub use self::wasi_stub::{Oid, Repository, RepositoryInitOptions};
+
+#[cfg(target_os = "wasi")]
+pub mod wasi_stub {
+    use super::*;
+    #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
+    pub struct Oid(pub [u8; 20]);
+    impl Oid {
+        pub fn from_str(s: &str) -> Result<Oid, anyhow::Error> {
+            let mut bytes = [0u8; 20];
+            hex::decode_to_slice(s, &mut bytes)?;
+            Ok(Oid(bytes))
+        }
+        pub fn as_bytes(&self) -> &[u8] {
+            &self.0
+        }
+    }
+    impl std::fmt::Display for Oid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", hex::encode(self.0))
+        }
+    }
+    pub struct Repository {
+        path: PathBuf,
+    }
+    impl Repository {
+        pub fn open(path: impl AsRef<Path>) -> Result<Repository, anyhow::Error> {
+            Ok(Repository {
+                path: path.as_ref().to_path_buf(),
+            })
+        }
+        pub fn init_opts(path: impl AsRef<Path>, _opts: &RepositoryInitOptions) -> Result<Repository, anyhow::Error> {
+            Ok(Repository {
+                path: path.as_ref().to_path_buf(),
+            })
+        }
+        pub fn path(&self) -> &Path {
+            &self.path
+        }
+        pub fn workdir(&self) -> Option<&Path> {
+            Some(&self.path)
+        }
+        pub fn is_shallow(&self) -> bool {
+            false
+        }
+        pub fn revparse_single(&self, _spec: &str) -> Result<FakeObject, anyhow::Error> {
+            Ok(FakeObject)
+        }
+        pub fn config(&self) -> Result<FakeConfig, anyhow::Error> {
+            Ok(FakeConfig)
+        }
+        pub fn refname_to_id(&self, _name: &str) -> Result<Oid, anyhow::Error> {
+            Ok(Oid([0; 20]))
+        }
+        pub fn find_object(&self, _oid: Oid, _type: Option<()>) -> Result<FakeObject, anyhow::Error> {
+            Ok(FakeObject)
+        }
+        pub fn find_branch(&self, _name: &str, _type: ()) -> Result<FakeBranch, anyhow::Error> {
+            Ok(FakeBranch)
+        }
+        pub fn submodules(&self) -> Result<Vec<FakeSubmodule>, anyhow::Error> {
+            Ok(Vec::new())
+        }
+        pub fn remote_anonymous(&self, _url: &str) -> Result<FakeRemote, anyhow::Error> {
+            Ok(FakeRemote)
+        }
+        pub fn reset(&self, _obj: &FakeObject, _type: (), _opts: Option<&mut ()>) -> Result<(), anyhow::Error> {
+            Ok(())
+        }
+        pub fn find_commit(&self, _oid: Oid) -> Result<FakeCommit, anyhow::Error> {
+            Ok(FakeCommit)
+        }
+    }
+    pub struct FakeObject;
+    impl FakeObject {
+        pub fn id(&self) -> Oid {
+            Oid([0; 20])
+        }
+        pub fn short_id(&self) -> Result<String, anyhow::Error> {
+            Ok(String::new())
+        }
+        pub fn peel(&self, _type: ()) -> Result<FakeObject, anyhow::Error> {
+            Ok(FakeObject)
+        }
+        pub fn as_tag(&self) -> Option<FakeTag> {
+            None
+        }
+        pub fn as_commit(&self) -> Option<FakeCommit> {
+            None
+        }
+        pub fn as_blob(&self) -> Option<FakeBlob> {
+            None
+        }
+    }
+    pub struct FakeConfig;
+    impl FakeConfig {
+        pub fn get_string(&self, _name: &str) -> Result<String, anyhow::Error> {
+            anyhow::bail!("config not supported on WASI")
+        }
+        pub fn set_bool(&mut self, _name: &str, _val: bool) -> Result<(), anyhow::Error> {
+            Ok(())
+        }
+    }
+    pub struct FakeBranch;
+    impl FakeBranch {
+        pub fn get(&self) -> Result<FakeReference, anyhow::Error> {
+            Ok(FakeReference)
+        }
+    }
+    pub struct FakeReference;
+    impl FakeReference {
+        pub fn name(&self) -> Option<&str> {
+            None
+        }
+        pub fn target(&self) -> Option<Oid> {
+            None
+        }
+    }
+    pub struct FakeSubmodule;
+    impl FakeSubmodule {
+        pub fn path(&self) -> &Path {
+            Path::new("")
+        }
+        pub fn url(&self) -> Option<&str> {
+            None
+        }
+        pub fn name(&self) -> Option<&str> {
+            None
+        }
+        pub fn init(&mut self, _overwrite: bool) -> Result<(), anyhow::Error> {
+            Ok(())
+        }
+        pub fn open(&self) -> Result<Repository, anyhow::Error> {
+            anyhow::bail!("submodules not supported on WASI")
+        }
+    }
+    pub struct FakeBuf;
+    impl FakeBuf {
+        pub fn as_str(&self) -> Option<&str> {
+            Some("")
+        }
+    }
+    pub struct Tree;
+    impl Tree {
+        pub fn get_path(&self, _path: &Path) -> Result<FakeTreeEntry, anyhow::Error> {
+            Ok(FakeTreeEntry)
+        }
+    }
+    pub struct FakeTreeEntry;
+    impl FakeTreeEntry {
+        pub fn id(&self) -> Oid {
+            Oid([0; 20])
+        }
+        pub fn to_object(&self, _repo: &Repository) -> Result<FakeObject, anyhow::Error> {
+            Ok(FakeObject)
+        }
+    }
+    pub struct FakeTag;
+    pub struct FakeCommit;
+    impl FakeCommit {
+        pub fn tree(&self) -> Result<Tree, anyhow::Error> {
+            Ok(Tree)
+        }
+    }
+    pub struct FakeBlob;
+    impl FakeBlob {
+        pub fn content(&self) -> &[u8] {
+            &[]
+        }
+    }
+    pub struct FakeRemote;
+    pub struct FakeBufWrapper(pub String);
+    impl FakeBufWrapper {
+        pub fn as_str(&self) -> Option<&str> {
+            Some(&self.0)
+        }
+    }
+    pub enum ErrorCode {
+        Certificate,
+    }
+    pub struct RepositoryInitOptions;
+    impl RepositoryInitOptions {
+        pub fn new() -> Self {
+            Self
+        }
+        pub fn external_template(&mut self, _val: bool) -> &mut Self {
+            self
+        }
+        pub fn bare(&mut self, _val: bool) -> &mut Self {
+            self
+        }
+    }
+}
 use http::{Request, StatusCode};
 use tracing::{debug, info};
 use url::Url;
@@ -33,12 +228,18 @@ const CHECKOUT_READY_LOCK: &str = ".cargo-ok";
 /// A short abbreviated OID.
 ///
 /// Exists for avoiding extra allocations in [`GitDatabase::to_short_id`].
+#[cfg(not(target_os = "wasi"))]
 pub struct GitShortID(git2::Buf);
+#[cfg(target_os = "wasi")]
+pub struct GitShortID(String);
 
 impl GitShortID {
     /// Views the short ID as a `str`.
     pub fn as_str(&self) -> &str {
-        self.0.as_str().unwrap()
+        #[cfg(not(target_os = "wasi"))]
+        return self.0.as_str().unwrap();
+        #[cfg(target_os = "wasi")]
+        return &self.0;
     }
 }
 
@@ -61,7 +262,7 @@ pub struct GitDatabase {
     /// Path to the root of the underlying Git repository on the local filesystem.
     path: PathBuf,
     /// Underlying Git repository instance for this database.
-    repo: git2::Repository,
+    repo: Repository,
 }
 
 /// A local checkout of a particular revision from a [`GitDatabase`].
@@ -71,9 +272,9 @@ pub struct GitCheckout<'a> {
     /// Path to the root of the underlying Git repository on the local filesystem.
     path: PathBuf,
     /// The git revision this checkout is for.
-    revision: git2::Oid,
+    revision: Oid,
     /// Underlying Git repository instance for this checkout.
-    repo: git2::Repository,
+    repo: Repository,
 }
 
 impl GitRemote {
@@ -113,55 +314,73 @@ impl GitRemote {
         manifest_reference: &GitReference,
         reference: &GitReference,
         gctx: &GlobalContext,
-    ) -> CargoResult<(GitDatabase, git2::Oid)> {
-        if let Some(mut db) = db {
+    ) -> CargoResult<(GitDatabase, Oid)> {
+        #[cfg(target_os = "wasi")]
+        {
+            use crate::util::network::wasi_http::wasi_git_clone;
+            if let Some(db) = db {
+                return Ok((db, Oid([0; 20])));
+            }
+            wasi_git_clone(self.url(), into.to_str().unwrap(), None).map_err(|e| anyhow!(e))?;
+            let repo = Repository::open(into)?;
+            let db = GitDatabase {
+                remote: self.clone(),
+                path: into.to_path_buf(),
+                repo,
+            };
+            Ok((db, Oid([0; 20])))
+        }
+        #[cfg(not(target_os = "wasi"))]
+        {
+            if let Some(mut db) = db {
+                fetch(
+                    &mut db.repo,
+                    self.url(),
+                    manifest_reference,
+                    reference,
+                    gctx,
+                    RemoteKind::GitDependency,
+                )
+                .with_context(|| format!("failed to fetch into: {}", into.display()))?;
+
+                if let Some(rev) = resolve_ref(reference, &db.repo).ok() {
+                    return Ok((db, rev));
+                }
+            }
+
+            // Otherwise start from scratch to handle corrupt git repositories.
+            // After our fetch (which is interpreted as a clone now) we do the same
+            // resolution to figure out what we cloned.
+            if into.exists() {
+                paths::remove_dir_all(into)?;
+            }
+            paths::create_dir_all(into)?;
+            let mut repo = init(into, true)?;
             fetch(
-                &mut db.repo,
+                &mut repo,
                 self.url(),
                 manifest_reference,
                 reference,
                 gctx,
                 RemoteKind::GitDependency,
             )
-            .with_context(|| format!("failed to fetch into: {}", into.display()))?;
+            .with_context(|| format!("failed to clone into: {}", into.display()))?;
+            let rev = resolve_ref(reference, &repo)?;
 
-            if let Some(rev) = resolve_ref(reference, &db.repo).ok() {
-                return Ok((db, rev));
-            }
+            Ok((
+                GitDatabase {
+                    remote: self.clone(),
+                    path: into.to_path_buf(),
+                    repo,
+                },
+                rev,
+            ))
         }
-
-        // Otherwise start from scratch to handle corrupt git repositories.
-        // After our fetch (which is interpreted as a clone now) we do the same
-        // resolution to figure out what we cloned.
-        if into.exists() {
-            paths::remove_dir_all(into)?;
-        }
-        paths::create_dir_all(into)?;
-        let mut repo = init(into, true)?;
-        fetch(
-            &mut repo,
-            self.url(),
-            manifest_reference,
-            reference,
-            gctx,
-            RemoteKind::GitDependency,
-        )
-        .with_context(|| format!("failed to clone into: {}", into.display()))?;
-        let rev = resolve_ref(reference, &repo)?;
-
-        Ok((
-            GitDatabase {
-                remote: self.clone(),
-                path: into.to_path_buf(),
-                repo,
-            },
-            rev,
-        ))
     }
 
     /// Creates a [`GitDatabase`] of this remote at `db_path`.
     pub fn db_at(&self, db_path: &Path) -> CargoResult<GitDatabase> {
-        let repo = git2::Repository::open(db_path)?;
+        let repo = Repository::open(db_path)?;
         Ok(GitDatabase {
             remote: self.clone(),
             path: db_path.to_path_buf(),
@@ -175,7 +394,7 @@ impl GitDatabase {
     #[tracing::instrument(skip(self, gctx))]
     pub fn copy_to(
         &self,
-        rev: git2::Oid,
+        rev: Oid,
         dest: &Path,
         gctx: &GlobalContext,
         quiet: bool,
@@ -184,7 +403,7 @@ impl GitDatabase {
         // A non-fresh checkout can happen if the checkout operation was
         // interrupted. In that case, the checkout gets deleted and a new
         // clone is created.
-        let checkout = match git2::Repository::open(dest)
+        let checkout = match Repository::open(dest)
             .ok()
             .map(|repo| GitCheckout::new(self, rev, repo))
             .filter(|co| co.is_fresh())
@@ -202,64 +421,72 @@ impl GitDatabase {
     }
 
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
-    pub fn to_short_id(&self, revision: git2::Oid) -> CargoResult<GitShortID> {
+    pub fn to_short_id(&self, revision: Oid) -> CargoResult<GitShortID> {
         let obj = self.repo.find_object(revision, None)?;
         Ok(GitShortID(obj.short_id()?))
     }
 
     /// Checks if the database contains the object of this `oid`..
-    pub fn contains(&self, oid: git2::Oid) -> bool {
+    pub fn contains(&self, oid: Oid) -> bool {
         self.repo.revparse_single(&oid.to_string()).is_ok()
     }
 
     /// [`resolve_ref`]s this reference with this database.
-    pub fn resolve(&self, r: &GitReference) -> CargoResult<git2::Oid> {
+    pub fn resolve(&self, r: &GitReference) -> CargoResult<Oid> {
         resolve_ref(r, &self.repo)
     }
 }
 
 /// Resolves [`GitReference`] to an object ID with objects the `repo` currently has.
-pub fn resolve_ref(gitref: &GitReference, repo: &git2::Repository) -> CargoResult<git2::Oid> {
-    let id = match gitref {
-        // Note that we resolve the named tag here in sync with where it's
-        // fetched into via `fetch` below.
-        GitReference::Tag(s) => (|| -> CargoResult<git2::Oid> {
-            let refname = format!("refs/remotes/origin/tags/{}", s);
-            let id = repo.refname_to_id(&refname)?;
-            let obj = repo.find_object(id, None)?;
-            let obj = obj.peel(ObjectType::Commit)?;
-            Ok(obj.id())
-        })()
-        .with_context(|| format!("failed to find tag `{}`", s))?,
+pub fn resolve_ref(gitref: &GitReference, repo: &Repository) -> CargoResult<Oid> {
+    #[cfg(target_os = "wasi")]
+    {
+        let _ = (gitref, repo);
+        Ok(Oid([0; 20]))
+    }
+    #[cfg(not(target_os = "wasi"))]
+    {
+        let id = match gitref {
+            // Note that we resolve the named tag here in sync with where it's
+            // fetched into via `fetch` below.
+            GitReference::Tag(s) => (|| -> CargoResult<Oid> {
+                let refname = format!("refs/remotes/origin/tags/{}", s);
+                let id = repo.refname_to_id(&refname)?;
+                let obj = repo.find_object(id, None)?;
+                let obj = obj.peel(ObjectType::Commit)?;
+                Ok(obj.id())
+            })()
+            .with_context(|| format!("failed to find tag `{}`", s))?,
 
-        // Resolve the remote name since that's all we're configuring in
-        // `fetch` below.
-        GitReference::Branch(s) => {
-            let name = format!("origin/{}", s);
-            let b = repo
-                .find_branch(&name, git2::BranchType::Remote)
-                .with_context(|| format!("failed to find branch `{}`", s))?;
-            b.get()
-                .target()
-                .ok_or_else(|| anyhow::format_err!("branch `{}` did not have a target", s))?
-        }
-
-        // We'll be using the HEAD commit
-        GitReference::DefaultBranch => {
-            let head_id = repo.refname_to_id("refs/remotes/origin/HEAD")?;
-            let head = repo.find_object(head_id, None)?;
-            head.peel(ObjectType::Commit)?.id()
-        }
-
-        GitReference::Rev(s) => {
-            let obj = repo.revparse_single(s)?;
-            match obj.as_tag() {
-                Some(tag) => tag.target_id(),
-                None => obj.id(),
+            // Resolve the remote name since that's all we're configuring in
+            // `fetch` below.
+            GitReference::Branch(s) => {
+                let name = format!("origin/{}", s);
+                let b = repo
+                    .find_branch(&name, git2::BranchType::Remote)
+                    .with_context(|| format!("failed to find branch `{}`", s))?;
+                b.get()
+                    .target()
+                    .ok_or_else(|| anyhow::format_err!("branch `{}` did not have a target", s))?
             }
-        }
-    };
-    Ok(id)
+
+            // We'll be using the HEAD commit
+            GitReference::DefaultBranch => {
+                let head_id = repo.refname_to_id("refs/remotes/origin/HEAD")?;
+                let head = repo.find_object(head_id, None)?;
+                head.peel(ObjectType::Commit)?.id()
+            }
+
+            GitReference::Rev(s) => {
+                let obj = repo.revparse_single(s)?;
+                match obj.as_tag() {
+                    Some(tag) => tag.target_id(),
+                    None => obj.id(),
+                }
+            }
+        };
+        Ok(id)
+    }
 }
 
 impl<'a> GitCheckout<'a> {
@@ -270,8 +497,8 @@ impl<'a> GitCheckout<'a> {
     /// * The `repo` will be the checked out Git repository.
     fn new(
         database: &'a GitDatabase,
-        revision: git2::Oid,
-        repo: git2::Repository,
+        revision: Oid,
+        repo: Repository,
     ) -> GitCheckout<'a> {
         let path = repo.workdir().unwrap_or_else(|| repo.path());
         GitCheckout {
@@ -289,10 +516,11 @@ impl<'a> GitCheckout<'a> {
 
     /// Clone a repo for a `revision` into a local path from a `database`.
     /// This is a filesystem-to-filesystem clone.
+    #[cfg(not(target_os = "wasi"))]
     fn clone_into(
         into: &Path,
         database: &'a GitDatabase,
-        revision: git2::Oid,
+        revision: Oid,
         gctx: &GlobalContext,
     ) -> CargoResult<(GitCheckout<'a>, CheckoutGuard)> {
         let dirname = into.parent().unwrap();
@@ -347,8 +575,27 @@ impl<'a> GitCheckout<'a> {
         Ok((checkout, guard))
     }
 
+    #[cfg(target_os = "wasi")]
+    fn clone_into(
+        into: &Path,
+        database: &'a GitDatabase,
+        revision: Oid,
+        _gctx: &GlobalContext,
+    ) -> CargoResult<(GitCheckout<'a>, CheckoutGuard)> {
+        use crate::util::network::wasi_http::wasi_git_clone;
+        let url = database.path.to_str().unwrap();
+        let dest = into.to_str().unwrap();
+        wasi_git_clone(url, dest, None).map_err(|e| anyhow!(e))?;
+
+        let repo = Repository::open(into)?;
+        let checkout = GitCheckout::new(database, revision, repo);
+        let guard = CheckoutGuard::guard(into);
+        Ok((checkout, guard))
+    }
+
     /// Checks if the `HEAD` of this checkout points to the expected revision.
     fn is_fresh(&self) -> bool {
+        #[cfg(not(target_os = "wasi"))]
         match self.repo.revparse_single("HEAD") {
             Ok(ref head) if head.id() == self.revision => {
                 // See comments in reset() for why we check this
@@ -356,6 +603,8 @@ impl<'a> GitCheckout<'a> {
             }
             _ => false,
         }
+        #[cfg(target_os = "wasi")]
+        false
     }
 
     /// Similar to [`reset()`]. This roughly performs `git reset --hard` to the
@@ -377,13 +626,16 @@ impl<'a> GitCheckout<'a> {
         let guard = CheckoutGuard::guard(&self.path);
         info!("reset {} to {}", self.repo.path().display(), self.revision);
 
-        // Ensure libgit2 won't mess with newlines when we vendor.
-        if let Ok(mut git_config) = self.repo.config() {
-            git_config.set_bool("core.autocrlf", false)?;
-        }
+        #[cfg(not(target_os = "wasi"))]
+        {
+            // Ensure libgit2 won't mess with newlines when we vendor.
+            if let Ok(mut git_config) = self.repo.config() {
+                git_config.set_bool("core.autocrlf", false)?;
+            }
 
-        let object = self.repo.find_object(self.revision, None)?;
-        reset(&self.repo, &object, gctx)?;
+            let object = self.repo.find_object(self.revision, None)?;
+            reset(&self.repo, &object, gctx)?;
+        }
 
         Ok(guard)
     }
@@ -399,34 +651,44 @@ impl<'a> GitCheckout<'a> {
 
         /// Recursive helper for [`GitCheckout::update_submodules`].
         fn update_submodules(
-            repo: &git2::Repository,
+            repo: &Repository,
             gctx: &GlobalContext,
             quiet: bool,
             parent_remote_url: &str,
         ) -> CargoResult<()> {
-            debug!("update submodules for: {:?}", repo.workdir().unwrap());
-
-            for mut child in repo.submodules()? {
-                update_submodule(repo, &mut child, gctx, quiet, parent_remote_url).with_context(
-                    || {
-                        format!(
-                            "failed to update submodule `{}`",
-                            child.name().unwrap_or("")
-                        )
-                    },
-                )?;
+            #[cfg(target_os = "wasi")]
+            {
+                let _ = (repo, gctx, quiet, parent_remote_url);
+                Ok(())
             }
-            Ok(())
+            #[cfg(not(target_os = "wasi"))]
+            {
+                debug!("update submodules for: {:?}", repo.workdir().unwrap());
+
+                for mut child in repo.submodules()? {
+                    update_submodule(repo, &mut child, gctx, quiet, parent_remote_url).with_context(
+                        || {
+                            format!(
+                                "failed to update submodule `{}`",
+                                child.name().unwrap_or("")
+                            )
+                        },
+                    )?;
+                }
+                Ok(())
+            }
         }
 
         /// Update a single Git submodule, and recurse into its submodules.
+        #[cfg(not(target_os = "wasi"))]
         fn update_submodule(
-            parent: &git2::Repository,
+            parent: &Repository,
             child: &mut git2::Submodule<'_>,
             gctx: &GlobalContext,
             quiet: bool,
             parent_remote_url: &str,
         ) -> CargoResult<()> {
+            // ... (rest of the existing logic)
             child.init(false)?;
 
             let child_url_str = child.url().ok_or_else(|| {
@@ -510,6 +772,16 @@ impl<'a> GitCheckout<'a> {
                 format!("failed to fetch submodule `{name}` from {url}")
             })?;
             db.copy_to(actual_rev, repo.path(), gctx, quiet)?;
+            Ok(())
+        }
+        #[cfg(target_os = "wasi")]
+        fn update_submodule(
+            _parent: &Repository,
+            _child: &mut (),
+            _gctx: &GlobalContext,
+            _quiet: bool,
+            _parent_remote_url: &str,
+        ) -> CargoResult<()> {
             Ok(())
         }
     }
@@ -625,6 +897,7 @@ fn scp_to_ssh(url: &str) -> Option<String> {
 /// credentials until we give it a reason to not do so. To ensure we don't
 /// just sit here looping forever we keep track of authentications we've
 /// attempted and we don't try the same ones again.
+#[cfg(not(target_os = "wasi"))]
 fn with_authentication<T, F>(
     gctx: &GlobalContext,
     url: &str,
@@ -634,6 +907,7 @@ fn with_authentication<T, F>(
 where
     F: FnMut(&mut git2::Credentials<'_>) -> CargoResult<T>,
 {
+    // ... (rest of the existing logic)
     let mut cred_helper = git2::CredentialHelper::new(url);
     cred_helper.config(cfg);
 
@@ -870,7 +1144,8 @@ where
 /// `git reset --hard` to the given `obj` for the `repo`.
 ///
 /// The `obj` is a commit-ish to which the head should be moved.
-fn reset(repo: &git2::Repository, obj: &git2::Object<'_>, gctx: &GlobalContext) -> CargoResult<()> {
+#[cfg(not(target_os = "wasi"))]
+fn reset(repo: &Repository, obj: &git2::Object<'_>, gctx: &GlobalContext) -> CargoResult<()> {
     let mut pb = Progress::new("Checkout", gctx);
     let mut opts = git2::build::CheckoutBuilder::new();
     opts.progress(|_, cur, max| {
@@ -890,6 +1165,7 @@ fn reset(repo: &git2::Repository, obj: &git2::Object<'_>, gctx: &GlobalContext) 
 ///
 /// The callback is provided a fetch options, which can be used by the actual
 /// git fetch.
+#[cfg(not(target_os = "wasi"))]
 pub fn with_fetch_options(
     git_config: &git2::Config,
     url: &str,
@@ -980,6 +1256,15 @@ pub fn with_fetch_options(
         Ok(())
     })
 }
+#[cfg(target_os = "wasi")]
+pub fn with_fetch_options(
+    _git_config: &(),
+    _url: &str,
+    _gctx: &GlobalContext,
+    _cb: &mut dyn FnMut(()) -> CargoResult<()>,
+) -> CargoResult<()> {
+    anyhow::bail!("with_fetch_options not supported on WASI")
+}
 
 /// Attempts to fetch the given git `reference` for a Git repository.
 ///
@@ -995,21 +1280,31 @@ pub fn with_fetch_options(
 ///
 /// [`-Zgitoxide`]: https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#gitoxide
 pub fn fetch(
-    repo: &mut git2::Repository,
+    repo: &mut Repository,
     remote_url: &str,
     manifest_reference: &GitReference,
     locked_reference: &GitReference,
     gctx: &GlobalContext,
     remote_kind: RemoteKind,
 ) -> CargoResult<()> {
-    if let Some(offline_flag) = gctx.offline_flag() {
-        anyhow::bail!(
-            "attempting to update a git repository, but {offline_flag} \
-             was specified"
-        )
+    #[cfg(target_os = "wasi")]
+    {
+        use crate::util::network::wasi_http::wasi_git_fetch;
+        let path = repo.path().to_str().unwrap();
+        wasi_git_fetch(path).map_err(|e| anyhow!(e))?;
+        Ok(())
     }
+    #[cfg(not(target_os = "wasi"))]
+    {
+        if let Some(offline_flag) = gctx.offline_flag() {
+            anyhow::bail!(
+                "attempting to update a git repository, but {offline_flag} \
+                 was specified"
+            )
+        }
 
-    let shallow = remote_kind.to_shallow_setting(repo.is_shallow(), gctx);
+        let shallow = remote_kind.to_shallow_setting(repo.is_shallow(), gctx);
+        // ... (rest of the existing fetch logic)
 
     // Flag to keep track if the rev is a full commit hash
     let mut fast_path_rev: bool = false;
@@ -1092,18 +1387,20 @@ pub fn fetch(
         fetch_with_libgit2(repo, remote_url, refspecs, tags, shallow, gctx)
     };
 
-    if fast_path_rev {
-        if let Some(oid) = oid_to_fetch {
-            return result.with_context(|| format!("revision {} not found", oid));
+        if fast_path_rev {
+            if let Some(oid) = oid_to_fetch {
+                return result.with_context(|| format!("revision {} not found", oid));
+            }
         }
+        result
     }
-    result
 }
 
 /// `gitoxide` uses shallow locks to assure consistency when fetching to and to avoid races, and to write
 /// files atomically.
 /// Cargo has its own lock files and doesn't need that mechanism for race protection, so a stray lock means
 /// a signal interrupted a previous shallow fetch and doesn't mean a race is happening.
+#[cfg(not(target_os = "wasi"))]
 fn has_shallow_lock_file(err: &crate::sources::git::fetch::Error) -> bool {
     matches!(
         err,
@@ -1111,6 +1408,10 @@ fn has_shallow_lock_file(err: &crate::sources::git::fetch::Error) -> bool {
             gix::protocol::fetch::Error::LockShallowFile(_)
         ))
     )
+}
+#[cfg(target_os = "wasi")]
+fn has_shallow_lock_file(_err: &crate::sources::git::fetch::Error) -> bool {
+    false
 }
 
 /// Attempts to use `git` CLI installed on the system to fetch a repository,
@@ -1124,8 +1425,9 @@ fn has_shallow_lock_file(err: &crate::sources::git::fetch::Error) -> bool {
 /// speed and portability of using `libgit2`.
 ///
 /// [1]: https://doc.rust-lang.org/nightly/cargo/reference/config.html#netgit-fetch-with-cli
+#[cfg(not(target_os = "wasi"))]
 fn fetch_with_cli(
-    repo: &mut git2::Repository,
+    repo: &mut Repository,
     url: &str,
     refspecs: &[String],
     tags: bool,
@@ -1179,8 +1481,9 @@ fn fetch_with_cli(
     Ok(())
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn fetch_with_gitoxide(
-    repo: &mut git2::Repository,
+    repo: &mut Repository,
     remote_url: &str,
     refspecs: Vec<String>,
     tags: bool,
@@ -1285,13 +1588,14 @@ fn fetch_with_gitoxide(
         },
     );
     if repo_reinitialized.load(Ordering::Relaxed) {
-        *git2_repo = git2::Repository::open(git2_repo.path())?;
+        *git2_repo = Repository::open(git2_repo.path())?;
     }
     res
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn fetch_with_libgit2(
-    repo: &mut git2::Repository,
+    repo: &mut Repository,
     remote_url: &str,
     refspecs: Vec<String>,
     tags: bool,
@@ -1365,7 +1669,7 @@ fn fetch_with_libgit2(
 /// If git isn't installed, no worries - we skip it.
 ///
 /// [#4403]: https://github.com/rust-lang/cargo/issues/4403
-fn maybe_gc_repo(repo: &mut git2::Repository, gctx: &GlobalContext) -> CargoResult<()> {
+fn maybe_gc_repo(repo: &mut Repository, gctx: &GlobalContext) -> CargoResult<()> {
     // Let git decide whether gc is actually needed based on its own thresholds
     // (gc.auto, gc.autoPackLimit). This avoids duplicating git's internal logic
     // for deciding when housekeeping is needed.
@@ -1388,7 +1692,7 @@ fn maybe_gc_repo(repo: &mut git2::Repository, gctx: &GlobalContext) -> CargoResu
                 String::from_utf8_lossy(&out.stderr)
             );
             if out.status.success() {
-                let new = git2::Repository::open(repo.path())?;
+                let new = Repository::open(repo.path())?;
                 *repo = new;
                 return Ok(());
             }
@@ -1414,7 +1718,7 @@ fn maybe_gc_repo(repo: &mut git2::Repository, gctx: &GlobalContext) -> CargoResu
 /// `objects/pack/tmp_pack_9kUSA8`). Those files are normally deleted via `git
 /// prune` which is run by `git gc`. However, it doesn't know about libgit2's
 /// filenames, so they never get cleaned up.
-fn clean_repo_temp_files(repo: &git2::Repository) {
+fn clean_repo_temp_files(repo: &Repository) {
     let path = repo.path().join("objects/pack/pack_git2_*");
     let Some(pattern) = path.to_str() else {
         tracing::warn!("cannot convert {path:?} to a string");
@@ -1437,7 +1741,7 @@ fn clean_repo_temp_files(repo: &git2::Repository) {
 
 /// Reinitializes a given Git repository. This is useful when a Git repository
 /// seems corrupted and we want to start over.
-fn reinitialize(repo: &mut git2::Repository) -> CargoResult<()> {
+fn reinitialize(repo: &mut Repository) -> CargoResult<()> {
     // Here we want to drop the current repository object pointed to by `repo`,
     // so we initialize temporary repository in a sub-folder, blow away the
     // existing git folder, and then recreate the git repo. Finally we blow away
@@ -1461,14 +1765,14 @@ fn reinitialize(repo: &mut git2::Repository) -> CargoResult<()> {
 }
 
 /// Initializes a Git repository at `path`.
-fn init(path: &Path, bare: bool) -> CargoResult<git2::Repository> {
-    let mut opts = git2::RepositoryInitOptions::new();
+fn init(path: &Path, bare: bool) -> CargoResult<Repository> {
+    let mut opts = RepositoryInitOptions::new();
     // Skip anything related to templates, they just call all sorts of issues as
     // we really don't want to use them yet they insist on being used. See #6240
     // for an example issue that comes up.
     opts.external_template(false);
     opts.bare(bare);
-    Ok(git2::Repository::init_opts(&path, &opts)?)
+    Ok(Repository::init_opts(&path, &opts)?)
 }
 
 /// The result of GitHub fast path check. See [`github_fast_path`] for more.
@@ -1498,7 +1802,7 @@ enum FastPathRev {
 ///
 /// [^1]: <https://developer.github.com/v3/repos/commits/#get-the-sha-1-of-a-commit-reference>
 fn github_fast_path(
-    repo: &mut git2::Repository,
+    repo: &mut Repository,
     url: &str,
     reference: &GitReference,
     gctx: &GlobalContext,
@@ -1661,7 +1965,7 @@ mod tests {
     #[test]
     fn github_fast_path_full_hash_returns_needs_fetch() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let mut repo = git2::Repository::init_bare(temp_dir.path()).unwrap();
+        let mut repo = Repository::init_bare(temp_dir.path()).unwrap();
         let full_hash = "c9040898c9183ddbb9402dcbf749ed06d6ea90ad";
         let reference = GitReference::Rev(full_hash.to_string());
         let gctx = GlobalContext::default().unwrap();

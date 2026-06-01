@@ -181,6 +181,11 @@ pub fn exit_status_to_string(status: ExitStatus) -> String {
         base.push_str(extra);
         base
     }
+
+    #[cfg(not(any(unix, windows)))]
+    fn status_to_string(status: ExitStatus) -> String {
+        status.to_string()
+    }
 }
 
 /// Returns `true` if the given process exit code is something a normal

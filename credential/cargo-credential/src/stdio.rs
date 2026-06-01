@@ -133,6 +133,27 @@ mod imp {
     }
 }
 
+#[cfg(not(any(unix, windows)))]
+mod imp {
+    use super::Stdio;
+    use std::{fs::File, io::Error};
+
+    pub const IN_DEVICE: &str = "/dev/null";
+    pub const OUT_DEVICE: &str = "/dev/null";
+    pub const NULL_DEVICE: &str = "/dev/null";
+
+    pub struct ReplacementGuard;
+
+    impl ReplacementGuard {
+        pub(super) fn new(_stdio: Stdio, _replacement: &mut File) -> Result<ReplacementGuard, Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "stdin/stdout redirection not supported on this platform",
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::fs::OpenOptions;

@@ -31,38 +31,47 @@ pub fn with_retry_and_progress(
              + Sync
      ),
 ) -> CargoResult<()> {
-    std::thread::scope(|s| {
-        let mut progress_bar = Progress::new("Fetch", gctx);
-        let is_shallow = gctx.cli_unstable().git.map_or(false, |features| {
-            features.shallow_deps || features.shallow_index
-        });
-        network::retry::with_retry(gctx, || {
-            let progress_root: Arc<gix::progress::tree::Root> =
-                gix::progress::tree::root::Options {
-                    initial_capacity: 10,
-                    message_buffer_capacity: 10,
-                }
-                .into();
-            let root = Arc::downgrade(&progress_root);
-            let thread = s.spawn(move || {
-                let mut progress = progress_root.add_child("operation");
-                let mut urls = RefCell::new(Default::default());
-                let res = cb(
-                    &repo_path,
-                    &AtomicBool::default(),
-                    &mut progress,
-                    &mut |url| {
-                        *urls.borrow_mut() = Some(url.to_owned());
-                    },
-                );
-                amend_authentication_hints(res, repo_remote_url, urls.get_mut().take())
+    #[cfg(target_os = "wasi")]
+    {
+        let _ = (repo_path, gctx, repo_remote_url, cb);
+        anyhow::bail!("gitoxide is not supported on WASI");
+    }
+    #[cfg(not(target_os = "wasi"))]
+    {
+        std::thread::scope(|s| {
+            let mut progress_bar = Progress::new("Fetch", gctx);
+            let is_shallow = gctx.cli_unstable().git.map_or(false, |features| {
+                features.shallow_deps || features.shallow_index
             });
-            translate_progress_to_bar(&mut progress_bar, root, is_shallow)?;
-            thread.join().expect("no panic in scoped thread")
+            network::retry::with_retry(gctx, || {
+                let progress_root: Arc<gix::progress::tree::Root> =
+                    gix::progress::tree::root::Options {
+                        initial_capacity: 10,
+                        message_buffer_capacity: 10,
+                    }
+                    .into();
+                let root = Arc::downgrade(&progress_root);
+                let thread = s.spawn(move || {
+                    let mut progress = progress_root.add_child("operation");
+                    let mut urls = RefCell::new(Default::default());
+                    let res = cb(
+                        &repo_path,
+                        &AtomicBool::default(),
+                        &mut progress,
+                        &mut |url| {
+                            *urls.borrow_mut() = Some(url.to_owned());
+                        },
+                    );
+                    amend_authentication_hints(res, repo_remote_url, urls.get_mut().take())
+                });
+                translate_progress_to_bar(&mut progress_bar, root, is_shallow)?;
+                thread.join().expect("no panic in scoped thread")
+            })
         })
-    })
+    }
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn translate_progress_to_bar(
     progress_bar: &mut Progress<'_>,
     root: Weak<gix::progress::tree::Root>,
@@ -179,6 +188,7 @@ fn translate_progress_to_bar(
     Ok(())
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn amend_authentication_hints(
     res: Result<(), crate::sources::git::fetch::Error>,
     remote_url: &str,
@@ -264,6 +274,7 @@ impl OpenMode {
 /// Produce a repository with everything pre-configured according to `config`. Most notably this includes
 /// transport configuration. Knowing its `purpose` helps to optimize the way we open the repository.
 /// Use `config_overrides` to configure the new repository.
+#[cfg(not(target_os = "wasi"))]
 pub fn open_repo(
     repo_path: &std::path::Path,
     config_overrides: Vec<BString>,
@@ -276,6 +287,14 @@ pub fn open_repo(
         opts.with(gix::sec::Trust::Full)
             .config_overrides(config_overrides)
     })
+}
+#[cfg(target_os = "wasi")]
+pub fn open_repo(
+    _repo_path: &std::path::Path,
+    _config_overrides: Vec<BString>,
+    _purpose: OpenMode,
+) -> Result<(), anyhow::Error> {
+    anyhow::bail!("open_repo not supported on WASI")
 }
 
 /// Convert `git` related cargo configuration into the respective `git` configuration which can be
@@ -364,33 +383,41 @@ pub fn cargo_config_to_gitoxide_overrides(gctx: &GlobalContext) -> CargoResult<V
 /// Reinitializes a given Git repository. This is useful when a Git repository
 /// seems corrupted, and we want to start over.
 pub fn reinitialize(git_dir: &Path) -> CargoResult<()> {
-    fn init(path: &Path, bare: bool) -> CargoResult<()> {
-        let mut opts = git2::RepositoryInitOptions::new();
-        // Skip anything related to templates, they just call all sorts of issues as
-        // we really don't want to use them yet they insist on being used. See #6240
-        // for an example issue that comes up.
-        opts.external_template(false);
-        opts.bare(bare);
-        git2::Repository::init_opts(&path, &opts)?;
+    #[cfg(target_os = "wasi")]
+    {
+        let _ = git_dir;
+        anyhow::bail!("reinitialize not supported on WASI")
+    }
+    #[cfg(not(target_os = "wasi"))]
+    {
+        fn init(path: &Path, bare: bool) -> CargoResult<()> {
+            let mut opts = git2::RepositoryInitOptions::new();
+            // Skip anything related to templates, they just call all sorts of issues as
+            // we really don't want to use them yet they insist on being used. See #6240
+            // for an example issue that comes up.
+            opts.external_template(false);
+            opts.bare(bare);
+            git2::Repository::init_opts(&path, &opts)?;
+            Ok(())
+        }
+        // Here we want to drop the current repository object pointed to by `repo`,
+        // so we initialize temporary repository in a sub-folder, blow away the
+        // existing git folder, and then recreate the git repo. Finally we blow away
+        // the `tmp` folder we allocated.
+        debug!("reinitializing git repo at {:?}", git_dir);
+        let tmp = git_dir.join("tmp");
+        let bare = !git_dir.ends_with(".git");
+        init(&tmp, false)?;
+        for entry in git_dir.read_dir()? {
+            let entry = entry?;
+            if entry.file_name().to_str() == Some("tmp") {
+                continue;
+            }
+            let path = entry.path();
+            drop(paths::remove_file(&path).or_else(|_| paths::remove_dir_all(&path)));
+        }
+        init(git_dir, bare)?;
+        paths::remove_dir_all(&tmp)?;
         Ok(())
     }
-    // Here we want to drop the current repository object pointed to by `repo`,
-    // so we initialize temporary repository in a sub-folder, blow away the
-    // existing git folder, and then recreate the git repo. Finally we blow away
-    // the `tmp` folder we allocated.
-    debug!("reinitializing git repo at {:?}", git_dir);
-    let tmp = git_dir.join("tmp");
-    let bare = !git_dir.ends_with(".git");
-    init(&tmp, false)?;
-    for entry in git_dir.read_dir()? {
-        let entry = entry?;
-        if entry.file_name().to_str() == Some("tmp") {
-            continue;
-        }
-        let path = entry.path();
-        drop(paths::remove_file(&path).or_else(|_| paths::remove_dir_all(&path)));
-    }
-    init(git_dir, bare)?;
-    paths::remove_dir_all(&tmp)?;
-    Ok(())
 }

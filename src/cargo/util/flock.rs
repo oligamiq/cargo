@@ -390,6 +390,11 @@ fn try_acquire(path: &Path, lock_try: &dyn Fn() -> Result<(), TryLockError>) -> 
     }
 }
 
+#[cfg(not(any(unix, windows)))]
+fn error_unsupported(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::Unsupported
+}
+
 /// Acquires a lock on a file in a "nice" manner.
 ///
 /// Almost all long-running blocking actions in Cargo have a status message

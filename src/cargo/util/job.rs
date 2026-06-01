@@ -46,6 +46,14 @@ mod imp {
     }
 }
 
+#[cfg(not(any(unix, windows)))]
+mod imp {
+    pub type Setup = ();
+    pub unsafe fn setup() -> Option<()> {
+        None
+    }
+}
+
 #[cfg(windows)]
 mod imp {
     use std::io;

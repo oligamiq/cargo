@@ -186,6 +186,7 @@ impl<'a> Retry<'a> {
 }
 
 fn maybe_spurious(err: &Error) -> bool {
+    #[cfg(not(target_os = "wasi"))]
     fn maybe_spurious_curl(curl_err: &curl::Error) -> bool {
         curl_err.is_couldnt_connect()
             || curl_err.is_couldnt_resolve_proxy()
@@ -198,6 +199,7 @@ fn maybe_spurious(err: &Error) -> bool {
             || curl_err.is_ssl_connect_error()
             || curl_err.is_partial_file()
     }
+    #[cfg(not(target_os = "wasi"))]
     if let Some(async_http_error) = err.downcast_ref::<http_async::Error>() {
         match async_http_error {
             http_async::Error::Easy(error) => return maybe_spurious_curl(error),
@@ -206,6 +208,7 @@ fn maybe_spurious(err: &Error) -> bool {
             http_async::Error::BadHeader { .. } => {}
         }
     }
+    #[cfg(not(target_os = "wasi"))]
     if let Some(git_err) = err.downcast_ref::<git2::Error>() {
         match git_err.class() {
             git2::ErrorClass::Net
@@ -215,6 +218,7 @@ fn maybe_spurious(err: &Error) -> bool {
             _ => (),
         }
     }
+    #[cfg(not(target_os = "wasi"))]
     if let Some(curl_err) = err.downcast_ref::<curl::Error>() {
         if maybe_spurious_curl(curl_err) {
             return true;
@@ -226,8 +230,10 @@ fn maybe_spurious(err: &Error) -> bool {
         }
     }
 
+    #[cfg(not(target_os = "wasi"))]
     use gix::protocol::transport::IsSpuriousError;
 
+    #[cfg(not(target_os = "wasi"))]
     if let Some(err) = err.downcast_ref::<crate::sources::git::fetch::Error>() {
         if err.is_spurious() {
             return true;
@@ -370,6 +376,7 @@ fn default_retry_schedule() {
 }
 
 #[test]
+#[cfg(not(target_os = "wasi"))]
 fn curle_http2_stream_is_spurious() {
     let code = curl_sys::CURLE_HTTP2_STREAM;
     let err = curl::Error::new(code);

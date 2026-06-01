@@ -1,4 +1,5 @@
 use cargo::core::features;
+#[cfg(not(target_os = "wasi"))]
 use cargo::util::network::http::http_handle;
 use cargo::util::network::http::needs_custom_http_transport;
 use cargo::util::{self, CargoResult, closest_msg, command_prelude};
@@ -342,6 +343,10 @@ fn is_executable<P: AsRef<Path>>(path: P) -> bool {
 fn is_executable<P: AsRef<Path>>(path: P) -> bool {
     path.as_ref().is_file()
 }
+#[cfg(target_os = "wasi")]
+fn is_executable<P: AsRef<Path>>(path: P) -> bool {
+    path.as_ref().is_file()
+}
 
 fn search_directories(gctx: &GlobalContext) -> Vec<PathBuf> {
     let mut path_dirs = if let Some(val) = gctx.get_env_os("PATH") {
@@ -388,11 +393,13 @@ fn init_git(gctx: &GlobalContext) {
     // validation in their code. This is inconvenient, but won't accidentally open consuming
     // applications up to security issues if they use git2 to open repositories elsewhere in their
     // code.
+    #[cfg(not(target_os = "wasi"))]
     unsafe {
         git2::opts::set_verify_owner_validation(false)
             .expect("set_verify_owner_validation should never fail");
     }
 
+    #[cfg(not(target_os = "wasi"))]
     init_git_transports(gctx);
 }
 
@@ -401,8 +408,10 @@ fn init_git(gctx: &GlobalContext) {
 /// If the user has a non-default network configuration, then libgit2 will be
 /// configured to use libcurl instead of the built-in networking support so
 /// that those configuration settings can be used.
+#[cfg(not(target_os = "wasi"))]
 #[tracing::instrument(skip_all)]
 fn init_git_transports(gctx: &GlobalContext) {
+    // ... (rest of the existing logic)
     match needs_custom_http_transport(gctx) {
         Ok(true) => {}
         _ => return,

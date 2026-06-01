@@ -8,6 +8,7 @@ use crate::sources::IndexSummary;
 use crate::sources::RecursivePathSource;
 use crate::sources::git::utils::GitDatabase;
 use crate::sources::git::utils::GitRemote;
+use crate::sources::git::utils::Oid;
 use crate::sources::git::utils::rev_to_oid;
 use crate::sources::source::MaybePackage;
 use crate::sources::source::QueryKind;
@@ -186,7 +187,7 @@ impl<'gctx> GitSource<'gctx> {
     ///
     /// This won't fetch anything if the required revision is
     /// already available locally.
-    pub(crate) fn fetch_db(&self, is_submodule: bool) -> CargoResult<(GitDatabase, git2::Oid)> {
+    pub(crate) fn fetch_db(&self, is_submodule: bool) -> CargoResult<(GitDatabase, Oid)> {
         let db_path = self.gctx.git_db_path().join(&self.ident);
         let db_path = db_path.into_path_unlocked();
 
@@ -316,7 +317,7 @@ enum Revision {
     /// [Git reference]: https://git-scm.com/book/en/v2/Git-Internals-Git-References
     Deferred(GitReference),
     /// A locked revision of the actual Git commit object ID.
-    Locked(git2::Oid),
+    Locked(Oid),
 }
 
 impl Revision {

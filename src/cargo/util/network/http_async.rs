@@ -16,11 +16,17 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::Easy2;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::Handler;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::InfoType;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::WriteError;
+#[cfg(not(target_os = "wasi"))]
 use curl::multi::Easy2Handle;
+#[cfg(not(target_os = "wasi"))]
 use curl::multi::Multi;
 use futures::channel::oneshot;
 use portable_atomic::AtomicI64;
@@ -37,11 +43,17 @@ type HttpResult<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[cfg(not(target_os = "wasi"))]
     #[error(transparent)]
     Multi(#[from] curl::MultiError),
 
+    #[cfg(not(target_os = "wasi"))]
     #[error(transparent)]
     Easy(#[from] curl::Error),
+
+    #[cfg(target_os = "wasi")]
+    #[error("{0}")]
+    Wasi(String),
 
     #[error(
         "transfer too slow: failed to transfer more than {low_speed_limit} bytes in {}s (transferred {transferred} bytes)",
@@ -57,8 +69,15 @@ pub enum Error {
     BadHeader { name: String, bytes: Vec<u8> },
 }
 
+#[cfg(not(target_os = "wasi"))]
 struct Message {
     easy: Easy2<Collector>,
+    sender: oneshot::Sender<HttpResult<Response>>,
+}
+
+#[cfg(target_os = "wasi")]
+struct Message {
+    request: Request,
     sender: oneshot::Sender<HttpResult<Response>>,
 }
 
@@ -68,7 +87,7 @@ struct Stats {
     dl_transferred: AtomicU64,
 }
 
-/// HTTP Client. Creating a new client spawns a cURL `Multi` and
+/// HTTP Client. Creating a new client spawns a worker
 /// thread that is used for all HTTP requests by this client.
 pub struct Client {
     channel: Option<Sender<Message>>,
@@ -98,26 +117,64 @@ impl Client {
     /// Perform a blocking HTTP request using this client.
     /// Does not start an async executor.
     pub fn request_blocking(&self, request: Request) -> HttpResult<Response> {
-        let mut handle = self.request_helper(request)?;
-        // Configure the handle timeout since we're blocking here and not using the
-        // client-level timeout.
-        self.handle_config.timeout.configure2(&mut handle)?;
-        handle.perform()?;
-        Ok(WorkerServer::process_response(handle))
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let mut handle = self.request_helper(request)?;
+            self.handle_config.timeout.configure2(&mut handle)?;
+            handle.perform()?;
+            Ok(WorkerServer::process_response(handle))
+        }
+        #[cfg(target_os = "wasi")]
+        {
+            use crate::util::network::wasi_http::fetch_wasi;
+            let method = request.method().to_string();
+            let url = request.uri().to_string();
+            let mut headers = Vec::new();
+            for (name, value) in request.headers() {
+                if let Ok(value) = value.to_str() {
+                    headers.push((name.to_string(), value.to_string()));
+                }
+            }
+            let body = if request.body().is_empty() {
+                None
+            } else {
+                Some(request.body().clone())
+            };
+
+            let res = fetch_wasi(&method, &url, headers, body);
+            match res {
+                Ok((status, headers, body)) => {
+                    let mut builder = http::Response::builder().status(status);
+                    for (name, value) in headers {
+                        builder = builder.header(name, value);
+                    }
+                    builder.body(body).map_err(|e| Error::Wasi(e.to_string()))
+                }
+                Err(e) => Err(Error::Wasi(e)),
+            }
+        }
     }
 
     /// Perform an HTTP request using this client.
     pub async fn request(&self, request: Request) -> HttpResult<Response> {
+        #[cfg(not(target_os = "wasi"))]
         let handle = self.request_helper(request)?;
+        #[cfg(target_os = "wasi")]
+        let handle = request;
+
         let (sender, receiver) = oneshot::channel();
         let req = Message {
+            #[cfg(not(target_os = "wasi"))]
             easy: handle,
+            #[cfg(target_os = "wasi")]
+            request: handle,
             sender,
         };
         self.channel.as_ref().unwrap().send(req).unwrap();
         receiver.await.unwrap()
     }
 
+    #[cfg(not(target_os = "wasi"))]
     fn request_helper(&self, request: Request) -> HttpResult<Easy2<Collector>> {
         let url = request.uri().to_string();
         debug!(target: "network::fetch", url);
@@ -193,13 +250,14 @@ impl std::fmt::Debug for Client {
     }
 }
 
-/// Manages the cURL `Multi`. Processes incoming work sent over the
-/// channel, and returns responses.
+/// Manages HTTP requests.
 struct WorkerServer {
     /// Channel to receive new work
     incoming_work: Receiver<Message>,
+    #[cfg(not(target_os = "wasi"))]
     /// curl multi interface
     multi: Multi,
+    #[cfg(not(target_os = "wasi"))]
     /// Map of token to curl handle and response channel
     handles: HashMap<
         usize,
@@ -208,47 +266,86 @@ struct WorkerServer {
             oneshot::Sender<HttpResult<Response>>,
         ),
     >,
+    #[cfg(not(target_os = "wasi"))]
     /// Next token to use
     token: usize,
     /// Global timeout configuration
     timeout: HttpTimeout,
     /// Global transfer statistics
     stats: Arc<Stats>,
+    #[cfg(not(target_os = "wasi"))]
     /// Instant when the current low speed window started
     low_speed_window_start: Instant,
+    #[cfg(not(target_os = "wasi"))]
     /// Amount of total bytes transferred when the current low speed window started
     low_speed_window_initial: u64,
 }
 
 impl WorkerServer {
-    fn run(
+    pub fn run(
         incoming_work: Receiver<Message>,
         multiplex: bool,
         timeout: HttpTimeout,
         stats: Arc<Stats>,
     ) {
-        let mut multi = Multi::new();
-        // let's not flood the server with connections
-        if let Err(e) = multi.set_max_host_connections(2) {
-            error!("failed to set max host connections in curl: {e}");
-        }
-        if let Err(e) = multi.pipelining(false, multiplex) {
-            error!("failed to enable multiplexing/pipelining in curl: {e}");
-        }
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let mut multi = Multi::new();
+            if let Err(e) = multi.set_max_host_connections(2) {
+                error!("failed to set max host connections in curl: {e}");
+            }
+            if let Err(e) = multi.pipelining(false, multiplex) {
+                error!("failed to enable multiplexing/pipelining in curl: {e}");
+            }
 
-        let mut worker = Self {
-            incoming_work,
-            multi,
-            handles: HashMap::new(),
-            token: 0,
-            timeout,
-            stats,
-            low_speed_window_start: Instant::now(),
-            low_speed_window_initial: 0,
-        };
-        worker.worker_loop();
+            let mut worker = Self {
+                incoming_work,
+                multi,
+                handles: HashMap::new(),
+                token: 0,
+                timeout,
+                stats,
+                low_speed_window_start: Instant::now(),
+                low_speed_window_initial: 0,
+            };
+            worker.worker_loop();
+        }
+        #[cfg(target_os = "wasi")]
+        {
+            use crate::util::network::wasi_http::fetch_wasi;
+            let _ = multiplex;
+            while let Ok(msg) = incoming_work.recv() {
+                let method = msg.request.method().to_string();
+                let url = msg.request.uri().to_string();
+                let mut headers = Vec::new();
+                for (name, value) in msg.request.headers() {
+                    if let Ok(value) = value.to_str() {
+                        headers.push((name.to_string(), value.to_string()));
+                    }
+                }
+                let body = if msg.request.body().is_empty() {
+                    None
+                } else {
+                    Some(msg.request.body().clone())
+                };
+
+                let res = fetch_wasi(&method, &url, headers, body);
+                let response = match res {
+                    Ok((status, headers, body)) => {
+                        let mut builder = http::Response::builder().status(status);
+                        for (name, value) in headers {
+                            builder = builder.header(name, value);
+                        }
+                        builder.body(body).map_err(|e| Error::Wasi(e.to_string()))
+                    }
+                    Err(e) => Err(Error::Wasi(e)),
+                };
+                let _ = msg.sender.send(response);
+            }
+        }
     }
 
+    #[cfg(not(target_os = "wasi"))]
     fn fail_and_drain(&mut self, e: &Error) {
         warn!(
             target: "network",
@@ -259,6 +356,7 @@ impl WorkerServer {
         }
     }
 
+    #[cfg(not(target_os = "wasi"))]
     fn process_response(mut easy: Easy2<Collector>) -> Response {
         let mut response =
             std::mem::replace(&mut easy.get_mut().response, Response::new(Vec::new()));
@@ -268,7 +366,6 @@ impl WorkerServer {
         {
             *response.status_mut() = status;
         }
-        // Would be nice to set HTTP version via `response.version_mut()`, but `curl` doesn't have it exposed.
         let extensions = Extensions {
             client_ip: easy.primary_ip().ok().flatten().map(str::to_string),
             effective_url: easy.effective_url().ok().flatten().map(str::to_string),
@@ -277,21 +374,18 @@ impl WorkerServer {
         response
     }
 
-    /// Marks the start of a new timeout window.
+    #[cfg(not(target_os = "wasi"))]
     fn reset_low_speed_timeout(&mut self) {
         self.low_speed_window_start = Instant::now();
         self.low_speed_window_initial = self.stats.dl_transferred.load(Ordering::Acquire);
     }
 
-    /// Return an error if we're at the end of a timeout window, we haven't
-    /// made enough progress.
+    #[cfg(not(target_os = "wasi"))]
     fn check_low_speed_timeout(&mut self) -> Option<Error> {
-        // Make sure we've waited for the timeout duration
         if Instant::now().duration_since(self.low_speed_window_start) < self.timeout.dur {
             return None;
         }
 
-        // Calculate how much we've transferred since the last check.
         let current = self.stats.dl_transferred.load(Ordering::Acquire);
         let transferred = current.saturating_sub(self.low_speed_window_initial);
         self.reset_low_speed_timeout();
@@ -306,27 +400,24 @@ impl WorkerServer {
         }
     }
 
+    #[cfg(not(target_os = "wasi"))]
     fn worker_loop(&mut self) {
         const INITIAL_DELAY: Duration = Duration::from_millis(1);
         let mut wait_backoff = INITIAL_DELAY;
         loop {
-            // Start any pending work.
             while let Ok(msg) = self.incoming_work.try_recv() {
                 self.enqueue_request(msg);
                 wait_backoff = INITIAL_DELAY;
             }
 
             match self.multi.perform() {
-                Err(e) if e.is_call_perform() => {
-                    // cURL states if you receive `is_call_perform`, this means that you should call `perform` again.
-                }
+                Err(e) if e.is_call_perform() => {}
                 Err(e) => {
                     self.fail_and_drain(&Error::Multi(e));
                 }
                 Ok(running) => {
                     self.multi.messages(|msg| {
                         let t = msg.token().expect("all handles have tokens");
-                        trace!(token = t, "finish");
                         let Some((handle, sender)) = self.handles.remove(&t) else {
                             error!("missing entry {t} in handle table");
                             return;
@@ -338,7 +429,6 @@ impl WorkerServer {
                     });
 
                     if running > 0 {
-                        // Check for low speed timeout.
                         if let Some(timeout_error) = self.check_low_speed_timeout() {
                             self.fail_and_drain(&timeout_error);
                             continue;
@@ -353,44 +443,23 @@ impl WorkerServer {
                             .unwrap_or(max_timeout)
                             .min(max_timeout);
                         if timeout.is_zero() {
-                            // curl said not to wait.
                             continue;
                         }
-                        // Ideally we would use `Multi::poll` + a `MultiWaker` instead of `Multi::wait`
-                        // to wake the thread when new work is queued. But it requires curl 7.68+,
-                        // which is not available everywhere we support.
-                        //
-                        // Instead, we use an exponential backoff approach so that as long as requests
-                        // are being queued, we poll quickly to allow the requests to be added sooner.
-                        // Without this, we end up sitting in `Multi::wait` too long while new work is
-                        // added to the channel.
-                        //
-                        // `get_timeout` says we should wait *at most* the timeout amount, so reducing
-                        // the wait time is fine.
                         if wait_backoff < timeout {
                             wait_backoff *= 2;
                             timeout = wait_backoff
                         }
-                        trace!(
-                            pending = self.handles.len(),
-                            timeout = timeout.as_millis(),
-                            "curl wait"
-                        );
                         if let Err(e) = self.multi.wait(&mut [], timeout) {
                             self.fail_and_drain(&Error::Multi(e));
                         }
                     } else {
-                        // Block, waiting for more work
-                        trace!("all work completed");
                         match self.incoming_work.recv() {
                             Ok(msg) => {
-                                trace!("resuming work");
                                 self.reset_low_speed_timeout();
                                 self.enqueue_request(msg);
                                 wait_backoff = INITIAL_DELAY;
                             }
                             Err(_) => {
-                                // The sending channel is closed. Shut down the worker.
                                 break;
                             }
                         }
@@ -400,7 +469,7 @@ impl WorkerServer {
         }
     }
 
-    /// Adds the request to the `Multi`, or send an error back through the channel.
+    #[cfg(not(target_os = "wasi"))]
     fn enqueue_request(&mut self, message: Message) {
         match self.multi.add2(message.easy) {
             Ok(mut handle) => {
@@ -415,20 +484,16 @@ impl WorkerServer {
     }
 }
 
-/// Interface that cURL (`Easy2`) uses to make progress.
+#[cfg(not(target_os = "wasi"))]
 struct Collector {
-    /// The response being built
     response: Response,
-    /// The body to transmit
     request_body: Cursor<Vec<u8>>,
-    /// Whether we're in debug mode
     debug: bool,
-    /// Global transfer statistics.
     global_stats: Arc<Stats>,
-    /// How much has this particular transfer added to global `dl_remaining` stats.
     dl_remaining_delta: i64,
 }
 
+#[cfg(not(target_os = "wasi"))]
 impl Collector {
     fn new(stats: Arc<Stats>) -> Self {
         Collector {
@@ -441,6 +506,7 @@ impl Collector {
     }
 }
 
+#[cfg(not(target_os = "wasi"))]
 impl Handler for Collector {
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
         self.response.body_mut().extend_from_slice(data);
@@ -487,16 +553,15 @@ impl Handler for Collector {
     }
 }
 
+#[cfg(not(target_os = "wasi"))]
 impl Drop for Collector {
     fn drop(&mut self) {
-        // Zero out this transfer's contribution to the global dl_remaining.
         self.global_stats
             .dl_remaining
             .fetch_add(-self.dl_remaining_delta, Ordering::Release);
     }
 }
 
-/// Additional fields on an [`http::Response`].
 #[derive(Clone)]
 struct Extensions {
     client_ip: Option<String>,
@@ -536,13 +601,12 @@ impl ResponsePartsExtensions for Response {
     }
 }
 
-/// Splits HTTP `HEADER: VALUE` to a tuple.
+#[cfg(not(target_os = "wasi"))]
 fn handle_http_header(buf: &[u8]) -> Option<(&str, &str)> {
     if buf.is_empty() {
         return None;
     }
     let buf = std::str::from_utf8(buf).ok()?.trim_end();
-    // Don't let server sneak extra lines anywhere.
     if buf.contains('\n') {
         return None;
     }

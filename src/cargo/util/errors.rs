@@ -1,4 +1,5 @@
 use anyhow::Error;
+#[cfg(not(target_os = "wasi"))]
 use curl::easy::Easy;
 use http::Response;
 use std::fmt::{self, Write};
@@ -40,6 +41,7 @@ pub struct HttpNotSuccessful {
 }
 
 impl HttpNotSuccessful {
+    #[cfg(not(target_os = "wasi"))]
     pub fn new_from_handle(
         handle: &mut Easy,
         initial_url: &str,

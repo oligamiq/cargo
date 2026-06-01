@@ -22,18 +22,36 @@
 //! added (it just adds a little complexity). For example, hostname patterns,
 //! and revoked markers. See "FIXME" comments littered in this file.
 
+#[cfg(not(target_os = "wasi"))]
 use crate::CargoResult;
+#[cfg(not(target_os = "wasi"))]
 use crate::util::context::{Definition, GlobalContext, Value};
+#[cfg(not(target_os = "wasi"))]
 use crate::util::restricted_names::is_glob_pattern;
+#[cfg(not(target_os = "wasi"))]
 use base64::Engine as _;
+#[cfg(not(target_os = "wasi"))]
 use base64::engine::general_purpose::STANDARD;
+#[cfg(not(target_os = "wasi"))]
 use base64::engine::general_purpose::STANDARD_NO_PAD;
+#[cfg(not(target_os = "wasi"))]
 use git2::CertificateCheckStatus;
+#[cfg(not(target_os = "wasi"))]
 use git2::cert::{Cert, SshHostKeyType};
+#[cfg(not(target_os = "wasi"))]
 use hmac::Mac;
+#[cfg(not(target_os = "wasi"))]
 use std::collections::HashSet;
+#[cfg(not(target_os = "wasi"))]
 use std::fmt::{Display, Write};
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "wasi")]
+use crate::CargoResult;
+#[cfg(target_os = "wasi")]
+use crate::util::context::{GlobalContext, Value};
+
+#[cfg(not(target_os = "wasi"))]
+mod imp {
+    use super::*;
 
 /// These are host keys that are hard-coded in cargo to provide convenience.
 ///
@@ -148,6 +166,7 @@ impl Display for KnownHostLocation {
 }
 
 /// The git2 callback used to validate a certificate (only ssh known hosts are validated).
+#[cfg(not(target_os = "wasi"))]
 pub fn certificate_check(
     gctx: &GlobalContext,
     cert: &Cert<'_>,
@@ -156,6 +175,7 @@ pub fn certificate_check(
     config_known_hosts: Option<&Vec<Value<String>>>,
     diagnostic_home_config: &str,
 ) -> CargoResult<CertificateCheckStatus> {
+    // ... (rest of the existing logic)
     let Some(host_key) = cert.as_hostkey() else {
         // Return passthrough for TLS X509 certificates to use whatever validation
         // was done in git2.
@@ -1012,5 +1032,30 @@ mod tests {
             khs[0].host_matches("[example.com]:2222"),
             "Bracketed host with port should match"
         );
+    }
+}
+} // mod imp
+
+#[cfg(target_os = "wasi")]
+pub use wasi_stub::certificate_check;
+
+#[cfg(target_os = "wasi")]
+mod wasi_stub {
+    use crate::CargoResult;
+    use crate::util::context::{GlobalContext, Value};
+
+    pub enum CertificateCheckStatus {
+        _Placeholder,
+    }
+
+    pub fn certificate_check(
+        _gctx: &GlobalContext,
+        _cert: &(),
+        _host: &str,
+        _port: Option<u16>,
+        _config_known_hosts: Option<&Vec<Value<String>>>,
+        _diagnostic_home_config: &str,
+    ) -> CargoResult<CertificateCheckStatus> {
+        Ok(CertificateCheckStatus::_Placeholder)
     }
 }

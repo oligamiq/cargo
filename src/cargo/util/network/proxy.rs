@@ -19,9 +19,12 @@ pub fn http_proxy(http: &CargoHttpConfig) -> Option<String> {
     if let Some(s) = &http.proxy {
         return Some(s.into());
     }
-    git2::Config::open_default()
+    #[cfg(not(target_os = "wasi"))]
+    return git2::Config::open_default()
         .and_then(|cfg| cfg.get_string("http.proxy"))
-        .ok()
+        .ok();
+    #[cfg(target_os = "wasi")]
+    None
 }
 
 /// Determine if an http proxy exists.
