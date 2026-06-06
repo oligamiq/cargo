@@ -32,10 +32,7 @@ impl Env for OsEnv {
     fn home_dir(&self) -> Option<PathBuf> {
         #[cfg(target_os = "wasi")]
         {
-            if let Some(home) = std::env::var_os("HOME") {
-                return Some(PathBuf::from(home));
-            }
-            return Some(PathBuf::from("/"));
+            std::env::var_os("HOME").map(PathBuf::from)
         }
         #[cfg(not(target_os = "wasi"))]
         std::env::home_dir()

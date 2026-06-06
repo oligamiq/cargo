@@ -32,25 +32,19 @@ pub struct FossilRepo;
 
 impl GitRepo {
     pub fn init(path: &Path, _: &Path) -> CargoResult<GitRepo> {
-        #[cfg(not(target_os = "wasi"))]
-        {
-            git2::Repository::init(path)?;
-            Ok(GitRepo)
-        }
-        #[cfg(target_os = "wasi")]
-        {
-            let _ = path;
-            anyhow::bail!("git is not supported on WASI")
-        }
+        ProcessBuilder::new("git")
+            .arg("init")
+            .arg("--")
+            .arg(path)
+            .exec()?;
+        Ok(GitRepo)
     }
-    #[cfg(not(target_os = "wasi"))]
-    pub fn discover(path: &Path, _: &Path) -> Result<git2::Repository, git2::Error> {
-        git2::Repository::discover(path)
-    }
-    #[cfg(target_os = "wasi")]
+
     pub fn discover(path: &Path, _: &Path) -> Result<FakeRepo, anyhow::Error> {
         let _ = path;
-        anyhow::bail!("git is not supported on WASI")
+        // Since we don't have a real git2::Repository object, return FakeRepo.
+        // ProcessBuilder will be used for actual operations.
+        Ok(FakeRepo)
     }
 }
 

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::{self, Write};
+use std::io::{self};
 use std::iter::once;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output, Stdio};
@@ -236,10 +236,17 @@ impl ProcessBuilder {
 
     /// Like [`Command::status`] but with a better error message.
     pub fn status(&self) -> Result<ExitStatus> {
+        #[cfg(target_os = "wasi")]
+        {
+            let output = self.output()?;
+            return Ok(output.status);
+        }
+        #[cfg(not(target_os = "wasi"))]
         self._status()
             .with_context(|| ProcessError::could_not_execute(self))
     }
 
+    #[cfg(not(target_os = "wasi"))]
     fn _status(&self) -> io::Result<ExitStatus> {
         if !debug_force_argfile(self.retry_with_argfile) {
             let mut cmd = self.build_command();
@@ -286,15 +293,106 @@ impl ProcessBuilder {
     /// pretty quickly, and if the child handles the signal then we won't terminate
     /// (and we shouldn't!) until the process itself later exits.
     pub fn exec_replace(&self) -> Result<()> {
+        #[cfg(target_os = "wasi")]
+        return self.exec();
+        #[cfg(not(target_os = "wasi"))]
         imp::exec_replace(self)
     }
 
     /// Like [`Command::output`] but with a better error message.
     pub fn output(&self) -> Result<Output> {
+        #[cfg(target_os = "wasi")]
+        {
+            // WASI bridge path
+            // We need to access the wasi_spawn from the cargo crate.
+            // Since cargo-util is a separate crate, we might need a way to pass this in
+            // or define the FFI here too.
+            // Actually, wasi_http.rs was added to src/cargo/util/network/wasi_http.rs.
+            // cargo-util cannot see it.
+            // I should define the FFI in cargo-util or move the logic.
+            // Let's define the FFI here too as it's just raw extern C.
+            
+            #[link(wasm_import_module = "env")]
+            unsafe extern "C" {
+                fn wasi_ext_spawn(
+                    program_ptr: *const u8, program_len: usize,
+                    args_ptr: *const u8, args_len: usize,
+                    env_ptr: *const u8, env_len: usize,
+                    cwd_ptr: *const u8, cwd_len: usize,
+                    out_exit_code: *mut i32,
+                    out_stdout_ptr: *mut *mut u8, out_stdout_len: *mut usize,
+                    out_stderr_ptr: *mut *mut u8, out_stderr_len: *mut usize,
+                ) -> i32;
+            }
+
+            let program_s = self.program.to_string_lossy();
+            let mut args_buf = Vec::new();
+            for arg in &self.args {
+                args_buf.extend_from_slice(arg.to_string_lossy().as_bytes());
+                args_buf.push(0);
+            }
+            let mut env_buf = Vec::new();
+            for (k, v) in &self.env {
+                if let Some(v) = v {
+                    env_buf.extend_from_slice(k.as_bytes());
+                    env_buf.push(b'=');
+                    env_buf.extend_from_slice(v.to_string_lossy().as_bytes());
+                    env_buf.push(0);
+                }
+            }
+            let cwd_s = self.cwd.as_ref().map(|c| c.to_string_lossy()).unwrap_or_default();
+
+            let mut out_exit_code: i32 = 0;
+            let mut out_stdout_ptr: *mut u8 = std::ptr::null_mut();
+            let mut out_stdout_len: usize = 0;
+            let mut out_stderr_ptr: *mut u8 = std::ptr::null_mut();
+            let mut out_stderr_len: usize = 0;
+
+            let res = unsafe {
+                wasi_ext_spawn(
+                    program_s.as_ptr(), program_s.len(),
+                    args_buf.as_ptr(), args_buf.len(),
+                    env_buf.as_ptr(), env_buf.len(),
+                    cwd_s.as_ptr(), cwd_s.len(),
+                    &mut out_exit_code,
+                    &mut out_stdout_ptr, &mut out_stdout_len,
+                    &mut out_stderr_ptr, &mut out_stderr_len,
+                )
+            };
+
+            if res != 0 {
+                return Err(anyhow::format_err!("wasi_ext_spawn failed with code {}", res));
+            }
+
+            let stdout = unsafe { Vec::from_raw_parts(out_stdout_ptr, out_stdout_len, out_stdout_len) };
+            let stderr = unsafe { Vec::from_raw_parts(out_stderr_ptr, out_stderr_len, out_stderr_len) };
+            let status = unsafe { std::mem::zeroed() };
+
+            if out_exit_code != 0 {
+                let output = Output {
+                    status,
+                    stdout,
+                    stderr,
+                };
+                return Err(ProcessError::new(
+                    &format!("process didn't exit successfully: exit code {}", out_exit_code),
+                    None,
+                    Some(&output),
+                ).into());
+            }
+
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
+            });
+        }
+        #[cfg(not(target_os = "wasi"))]
         self._output()
             .with_context(|| ProcessError::could_not_execute(self))
     }
 
+    #[cfg(not(target_os = "wasi"))]
     fn _output(&self) -> io::Result<Output> {
         if !debug_force_argfile(self.retry_with_argfile) {
             let mut cmd = self.build_command();
@@ -349,105 +447,129 @@ impl ProcessBuilder {
         on_stderr_line: &mut dyn FnMut(&str) -> Result<()>,
         capture_output: bool,
     ) -> Result<Output> {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-
-        let mut callback_error = None;
-        let mut stdout_pos = 0;
-        let mut stderr_pos = 0;
-
-        let spawn = |mut cmd| {
-            if !debug_force_argfile(self.retry_with_argfile) {
-                match piped(&mut cmd, false).spawn() {
-                    Err(ref e) if self.should_retry_with_argfile(e) => {}
-                    Err(e) => return Err(e),
-                    Ok(child) => return Ok((child, None)),
-                }
-            }
-            let (mut cmd, argfile) = self.build_command_with_argfile()?;
-            Ok((piped(&mut cmd, false).spawn()?, Some(argfile)))
-        };
-
-        let status = (|| {
-            let cmd = self.build_command();
-            let (mut child, argfile) = spawn(cmd)?;
-            let out = child.stdout.take().unwrap();
-            let err = child.stderr.take().unwrap();
-            read2(out, err, &mut |is_out, data, eof| {
-                let pos = if is_out {
-                    &mut stdout_pos
-                } else {
-                    &mut stderr_pos
-                };
-                let idx = if eof {
-                    data.len()
-                } else {
-                    match data[*pos..].iter().rposition(|b| *b == b'\n') {
-                        Some(i) => *pos + i + 1,
-                        None => {
-                            *pos = data.len();
-                            return;
-                        }
-                    }
-                };
-
-                let new_lines = &data[..idx];
-
-                for line in String::from_utf8_lossy(new_lines).lines() {
-                    if callback_error.is_some() {
-                        break;
-                    }
-                    let callback_result = if is_out {
-                        on_stdout_line(line)
-                    } else {
-                        on_stderr_line(line)
-                    };
-                    if let Err(e) = callback_result {
-                        callback_error = Some(e);
-                        break;
-                    }
-                }
-
-                if capture_output {
-                    let dst = if is_out { &mut stdout } else { &mut stderr };
-                    dst.extend(new_lines);
-                }
-
-                data.drain(..idx);
-                *pos = 0;
-            })?;
-            let status = child.wait();
-            if let Some(argfile) = argfile {
-                close_tempfile_and_log_error(argfile);
-            }
-            status
-        })()
-        .with_context(|| ProcessError::could_not_execute(self))?;
-        let output = Output {
-            status,
-            stdout,
-            stderr,
-        };
-
+        #[cfg(target_os = "wasi")]
         {
-            let to_print = if capture_output { Some(&output) } else { None };
-            if let Some(e) = callback_error {
-                let cx = ProcessError::new(
-                    &format!("failed to parse process output: {}", self),
-                    Some(output.status),
-                    to_print,
-                );
-                bail!(anyhow::Error::new(cx).context(e));
-            } else if !output.status.success() {
-                bail!(ProcessError::new(
+            let output = self.output()?;
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                on_stdout_line(line)?;
+            }
+            for line in String::from_utf8_lossy(&output.stderr).lines() {
+                on_stderr_line(line)?;
+            }
+            if output.status.success() {
+                Ok(output)
+            } else {
+                let to_print = if capture_output { Some(&output) } else { None };
+                Err(ProcessError::new(
                     &format!("process didn't exit successfully: {}", self),
-                    Some(output.status),
+                    None,
                     to_print,
-                ));
+                )
+                .into())
             }
         }
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
 
-        Ok(output)
+            let mut callback_error = None;
+            let mut stdout_pos = 0;
+            let mut stderr_pos = 0;
+
+            let spawn = |mut cmd| {
+                if !debug_force_argfile(self.retry_with_argfile) {
+                    match piped(&mut cmd, false).spawn() {
+                        Err(ref e) if self.should_retry_with_argfile(e) => {}
+                        Err(e) => return Err(e),
+                        Ok(child) => return Ok((child, None)),
+                    }
+                }
+                let (mut cmd, argfile) = self.build_command_with_argfile()?;
+                Ok((piped(&mut cmd, false).spawn()?, Some(argfile)))
+            };
+
+            let status = (|| {
+                let cmd = self.build_command();
+                let (mut child, argfile) = spawn(cmd)?;
+                let out = child.stdout.take().unwrap();
+                let err = child.stderr.take().unwrap();
+                read2(out, err, &mut |is_out, data, eof| {
+                    let pos = if is_out {
+                        &mut stdout_pos
+                    } else {
+                        &mut stderr_pos
+                    };
+                    let idx = if eof {
+                        data.len()
+                    } else {
+                        match data[*pos..].iter().rposition(|b| *b == b'\n') {
+                            Some(i) => *pos + i + 1,
+                            None => {
+                                *pos = data.len();
+                                return;
+                            }
+                        }
+                    };
+
+                    let new_lines = &data[..idx];
+
+                    for line in String::from_utf8_lossy(new_lines).lines() {
+                        if callback_error.is_some() {
+                            break;
+                        }
+                        let callback_result = if is_out {
+                            on_stdout_line(line)
+                        } else {
+                            on_stderr_line(line)
+                        };
+                        if let Err(e) = callback_result {
+                            callback_error = Some(e);
+                            break;
+                        }
+                    }
+
+                    if capture_output {
+                        let dst = if is_out { &mut stdout } else { &mut stderr };
+                        dst.extend(new_lines);
+                    }
+
+                    data.drain(..idx);
+                    *pos = 0;
+                })?;
+                let status = child.wait();
+                if let Some(argfile) = argfile {
+                    close_tempfile_and_log_error(argfile);
+                }
+                status
+            })()
+            .with_context(|| ProcessError::could_not_execute(self))?;
+            let output = Output {
+                status,
+                stdout,
+                stderr,
+            };
+
+            {
+                let to_print = if capture_output { Some(&output) } else { None };
+                if let Some(e) = callback_error {
+                    let cx = ProcessError::new(
+                        &format!("failed to parse process output: {}", self),
+                        Some(output.status),
+                        to_print,
+                    );
+                    bail!(anyhow::Error::new(cx).context(e));
+                } else if !output.status.success() {
+                    bail!(ProcessError::new(
+                        &format!("process didn't exit successfully: {}", self),
+                        Some(output.status),
+                        to_print,
+                    ));
+                }
+            }
+
+            Ok(output)
+        }
     }
 
     /// Builds the command with an `@<path>` argfile that contains all the

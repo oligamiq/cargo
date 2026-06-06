@@ -849,7 +849,7 @@ pub fn install(
         // Print a warning that if this directory isn't in PATH that they won't be
         // able to run these commands.
         let path = gctx.get_env_os("PATH").unwrap_or_default();
-        let dst_in_path = env::split_paths(&path).any(|path| path == dst);
+        let dst_in_path = paths::split_paths(&path).any(|path| path == dst);
 
         if !dst_in_path {
             gctx.shell().warn(&format!(

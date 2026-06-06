@@ -43,6 +43,81 @@ unsafe extern "C" {
         path_ptr: *const u8,
         path_len: usize,
     ) -> i32;
+
+    fn wasi_ext_spawn(
+        program_ptr: *const u8,
+        program_len: usize,
+        args_ptr: *const u8,
+        args_len: usize,
+        env_ptr: *const u8,
+        env_len: usize,
+        cwd_ptr: *const u8,
+        cwd_len: usize,
+        out_exit_code: *mut i32,
+        out_stdout_ptr: *mut *mut u8,
+        out_stdout_len: *mut usize,
+        out_stderr_ptr: *mut *mut u8,
+        out_stderr_len: *mut usize,
+    ) -> i32;
+}
+
+#[cfg(target_os = "wasi")]
+pub fn wasi_spawn(
+    program: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+    env: &std::collections::BTreeMap<String, Option<std::ffi::OsString>>,
+    cwd: Option<&std::ffi::OsStr>,
+) -> Result<(i32, Vec<u8>, Vec<u8>), String> {
+    use std::io::Write;
+
+    let program_s = program.to_string_lossy();
+    
+    let mut args_buf = Vec::new();
+    for arg in args {
+        write!(args_buf, "{}\0", arg.to_string_lossy()).unwrap();
+    }
+
+    let mut env_buf = Vec::new();
+    for (k, v) in env {
+        if let Some(v) = v {
+            write!(env_buf, "{}={}\0", k, v.to_string_lossy()).unwrap();
+        }
+    }
+
+    let cwd_s = cwd.map(|c| c.to_string_lossy()).unwrap_or_default();
+
+    let mut out_exit_code: i32 = 0;
+    let mut out_stdout_ptr: *mut u8 = std::ptr::null_mut();
+    let mut out_stdout_len: usize = 0;
+    let mut out_stderr_ptr: *mut u8 = std::ptr::null_mut();
+    let mut out_stderr_len: usize = 0;
+
+    let res = unsafe {
+        wasi_ext_spawn(
+            program_s.as_ptr(),
+            program_s.len(),
+            args_buf.as_ptr(),
+            args_buf.len(),
+            env_buf.as_ptr(),
+            env_buf.len(),
+            cwd_s.as_ptr(),
+            cwd_s.len(),
+            &mut out_exit_code,
+            &mut out_stdout_ptr,
+            &mut out_stdout_len,
+            &mut out_stderr_ptr,
+            &mut out_stderr_len,
+        )
+    };
+
+    if res != 0 {
+        return Err(format!("wasi_ext_spawn failed with code {}", res));
+    }
+
+    let stdout = unsafe { Vec::from_raw_parts(out_stdout_ptr, out_stdout_len, out_stdout_len) };
+    let stderr = unsafe { Vec::from_raw_parts(out_stderr_ptr, out_stderr_len, out_stderr_len) };
+
+    Ok((out_exit_code, stdout, stderr))
 }
 
 #[cfg(target_os = "wasi")]

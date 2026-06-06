@@ -18,7 +18,11 @@ mod commands;
 use crate::command_prelude::*;
 
 fn main() {
+    #[cfg(target_os = "wasi")]
+    println!("DEBUG: main started");
     let _guard = setup_logger();
+    #[cfg(target_os = "wasi")]
+    println!("DEBUG: logger setup done");
 
     let mut gctx = match GlobalContext::default() {
         Ok(gctx) => gctx,
@@ -29,6 +33,7 @@ fn main() {
     };
 
     let nightly_features_allowed = matches!(&*features::channel(), "nightly" | "dev");
+    #[cfg(not(target_os = "wasi"))]
     if nightly_features_allowed {
         let _span = tracing::span!(tracing::Level::TRACE, "completions").entered();
         let args = std::env::args_os();
@@ -350,7 +355,7 @@ fn is_executable<P: AsRef<Path>>(path: P) -> bool {
 
 fn search_directories(gctx: &GlobalContext) -> Vec<PathBuf> {
     let mut path_dirs = if let Some(val) = gctx.get_env_os("PATH") {
-        env::split_paths(&val).collect()
+        cargo_util::paths::split_paths(&val).collect()
     } else {
         vec![]
     };

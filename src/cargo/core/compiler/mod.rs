@@ -728,7 +728,7 @@ fn add_plugin_deps(
 ) -> CargoResult<()> {
     let var = paths::dylib_path_envvar();
     let search_path = rustc.get_env(var).unwrap_or_default();
-    let mut search_path = env::split_paths(&search_path).collect::<Vec<_>>();
+    let mut search_path = paths::split_paths(&search_path).collect::<Vec<_>>();
     for (pkg_id, metadata) in &build_scripts.plugins {
         let output = build_script_outputs
             .get(*metadata)
@@ -823,7 +823,7 @@ fn prepare_rustc(build_runner: &BuildRunner<'_, '_>, unit: &Unit) -> CargoResult
         base.env("CARGO_PRIMARY_PACKAGE", "1");
         let file_list = build_runner.sbom_output_files(unit)?;
         if !file_list.is_empty() {
-            let file_list = std::env::join_paths(file_list)?;
+            let file_list = paths::join_paths(&file_list, "CARGO_SBOM_PATH")?;
             base.env("CARGO_SBOM_PATH", file_list);
         }
     }

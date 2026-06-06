@@ -18,7 +18,21 @@ use tempfile::Builder as TempFileBuilder;
 /// environment variable this is will be used for, which is included in the
 /// error message.
 pub fn join_paths<T: AsRef<OsStr>>(paths: &[T], env: &str) -> Result<OsString> {
-    env::join_paths(paths.iter()).with_context(|| {
+    #[cfg(target_os = "wasi")]
+    let joined: Result<OsString> = {
+        let mut joined = OsString::new();
+        for (i, path) in paths.iter().enumerate() {
+            if i > 0 {
+                joined.push(":");
+            }
+            joined.push(path.as_ref());
+        }
+        Ok(joined)
+    };
+    #[cfg(not(target_os = "wasi"))]
+    let joined: Result<OsString> = Ok(env::join_paths(paths.iter())?);
+
+    joined.with_context(|| {
         let mut message = format!(
             "failed to join paths from `${env}` together\n\n\
              Check if any of path segments listed below contain an \
@@ -31,6 +45,18 @@ pub fn join_paths<T: AsRef<OsStr>>(paths: &[T], env: &str) -> Result<OsString> {
 
         message
     })
+}
+
+pub fn split_paths<T: AsRef<OsStr>>(unparsed: T) -> impl Iterator<Item = PathBuf> {
+    #[cfg(target_os = "wasi")]
+    let iter = {
+        let s = unparsed.as_ref().to_string_lossy().into_owned();
+        s.split(':').map(PathBuf::from).collect::<Vec<_>>().into_iter()
+    };
+    #[cfg(not(target_os = "wasi"))]
+    let iter = env::split_paths(unparsed.as_ref()).collect::<Vec<_>>().into_iter();
+    
+    iter
 }
 
 /// Returns the name of the environment variable used for searching for
@@ -68,7 +94,7 @@ pub fn dylib_path_envvar() -> &'static str {
 /// will need to be dealt with.
 pub fn dylib_path() -> Vec<PathBuf> {
     match env::var_os(dylib_path_envvar()) {
-        Some(var) => env::split_paths(&var).collect(),
+        Some(var) => split_paths(&var).collect(),
         None => Vec::new(),
     }
 }
@@ -122,7 +148,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 pub fn resolve_executable(exec: &Path) -> Result<PathBuf> {
     if exec.components().count() == 1 {
         let paths = env::var_os("PATH").ok_or_else(|| anyhow::format_err!("no PATH"))?;
-        let candidates = env::split_paths(&paths).flat_map(|path| {
+        let candidates = split_paths(&paths).flat_map(|path| {
             let candidate = path.join(&exec);
             let with_exe = if env::consts::EXE_EXTENSION.is_empty() {
                 None

@@ -558,12 +558,19 @@ impl GlobalContext {
                 };
 
                 fn from_current_exe() -> CargoResult<PathBuf> {
-                    // Try fetching the path to `cargo` using `env::current_exe()`.
-                    // The method varies per operating system and might fail; in particular,
-                    // it depends on `/proc` being mounted on Linux, and some environments
-                    // (like containers or chroots) may not have that available.
-                    let exe = env::current_exe()?;
-                    Ok(exe)
+                    #[cfg(target_os = "wasi")]
+                    {
+                        anyhow::bail!("current_exe is not supported on WASI")
+                    }
+                    #[cfg(not(target_os = "wasi"))]
+                    {
+                        // Try fetching the path to `cargo` using `env::current_exe()`.
+                        // The method varies per operating system and might fail; in particular,
+                        // it depends on `/proc` being mounted on Linux, and some environments
+                        // (like containers or chroots) may not have that available.
+                        let exe = env::current_exe()?;
+                        Ok(exe)
+                    }
                 }
 
                 fn from_argv() -> CargoResult<PathBuf> {

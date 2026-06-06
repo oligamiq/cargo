@@ -167,7 +167,11 @@ pub fn fix(
 
     // Spin up our lock server, which our subprocesses will use to synchronize fixes.
     let lock_server = LockServer::new()?;
-    let mut wrapper = ProcessBuilder::new(env::current_exe()?);
+    #[cfg(target_os = "wasi")]
+    let cargo_exe = PathBuf::from("cargo");
+    #[cfg(not(target_os = "wasi"))]
+    let cargo_exe = env::current_exe()?;
+    let mut wrapper = ProcessBuilder::new(cargo_exe);
     wrapper.env(FIX_ENV_INTERNAL, lock_server.addr().to_string());
     let _started = lock_server.start()?;
 
