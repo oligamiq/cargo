@@ -877,15 +877,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-channel"
-version = "0.5.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1264,8 +1255,6 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 [[package]]
 name = "filetime"
 version = "0.2.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f98844151eee8917efc50bd9e8318cb963ae8b297431495d3f758616ea5c57db"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1758,13 +1747,11 @@ checksum = "af375693ad5333d0a2c66b4c5b2cbe9ccc38e34f8e8bf24e4ae42c12307fdc4f"
 dependencies = [
  "bytes",
  "crc32fast",
- "crossbeam-channel",
  "gix-path",
  "gix-trace",
  "gix-utils",
  "libc",
  "once_cell",
- "parking_lot",
  "prodash",
  "thiserror 2.0.18",
  "walkdir",
@@ -4442,6 +4429,10 @@ dependencies = [
  "rustix",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "test_project"
+version = "0.1.0"
 
 [[package]]
 name = "thiserror"

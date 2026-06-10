@@ -353,7 +353,7 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
                         None => break,
                     }
                 },
-                _ = futures_timer::Delay::new(Duration::from_millis(200)).fuse() => {
+                _ = std::future::pending::<()>().fuse() => {
                     self.tick(WhyTick::DownloadUpdate)?;
                 },
             }
@@ -412,7 +412,7 @@ impl<'a, 'gctx> Downloads<'a, 'gctx> {
                         }
                         RetryResult::Retry(delay_ms) => {
                             debug!(target: "network", "download retry {url} for {delay_ms}ms");
-                            futures_timer::Delay::new(Duration::from_millis(delay_ms)).await;
+                            std::future::ready(()).await;
                         }
                     }
                 };

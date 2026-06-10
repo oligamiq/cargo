@@ -240,6 +240,7 @@ impl Drop for Client {
         // Close the channel
         drop(self.channel.take().unwrap());
         // Join the thread
+        #[cfg(not(target_os = "wasi"))]
         let _ = self.thread_handle.take().unwrap().join();
     }
 }

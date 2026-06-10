@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "credential/*", "benches/benchsuite", "benches/capture"]
+members = ["crates/*", "credential/*", "benches/benchsuite", "benches/capture", "test_project"]
 exclude = [
     "target/", # exclude bench testing
 ]
@@ -52,7 +52,6 @@ futures-timer = "3.0.3"
 gix = { version = "0.83.0", default-features = false, features = [
     "sha1",
     "progress-tree",
-    "parallel",
     "dirwalk",
     "status",
 ] }
@@ -307,3 +306,7 @@ default = []
 
 [lints]
 workspace = true
+
+[patch.crates-io]
+filetime = { path = "/home/oligami/projects/filetime" }
+

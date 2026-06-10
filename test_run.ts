@@ -135,9 +135,11 @@ const wasi_snapshot_preview1 = {
     fd_seek: (fd: number, offset: bigint, whence: number, newoffset_ptr: number): number => {
         const entry = openFds.get(fd);
         if (!entry || !entry.file) return 8;
-        const res = entry.file.seekSync(offset, whence === 0 ? "start" : whence === 1 ? "current" : "end");
-        getView().setBigUint64(newoffset_ptr, res, true);
-        return 0;
+        try {
+            const res = entry.file.seekSync(Number(offset), whence);
+            getView().setBigUint64(newoffset_ptr, BigInt(res), true);
+            return 0;
+        } catch (_) { return 28; }
     },
     fd_fdstat_get: (fd: number, ptr: number) => {
         const entry = openFds.get(fd);
@@ -175,20 +177,23 @@ const wasi_snapshot_preview1 = {
             if (oflags & 8) options.truncate = true;
             if (fdflags & 1) options.append = true;
 
-            if (oflags & 2) {
-                const stat = Deno.statSync(hostPath);
-                if (!stat.isDirectory) return 54;
+            let isDir = false;
+            try { isDir = Deno.statSync(hostPath).isDirectory; } catch (_) {}
+
+            if ((oflags & 2) || isDir) {
+                if (!isDir && (oflags & 2)) return 54; // ENOTDIR
                 const newFd = getNextFd();
                 openFds.set(newFd, { type: "dir", path: hostPath });
                 getView().setUint32(opened_fd_ptr, newFd, true);
                 return 0;
             }
+            
             const file = Deno.openSync(hostPath, options);
             const newFd = getNextFd();
             openFds.set(newFd, { type: "file", file, path: hostPath });
             getView().setUint32(opened_fd_ptr, newFd, true);
             return 0;
-        } catch (_) { return 44; }
+        } catch (e: any) { return e.name === "AlreadyExists" ? 20 : 44; }
     },
     path_filestat_get: (fd: number, _flags: number, path_ptr: number, path_len: number, ptr: number): number => {
         const p = readString(path_ptr, path_len);
@@ -220,13 +225,13 @@ const wasi_snapshot_preview1 = {
             v.setBigUint64(ptr + 48, BigInt(stat.mtime?.getTime() || 0) * 1000000n, true);
             v.setBigUint64(ptr + 56, BigInt(stat.birthtime?.getTime() || 0) * 1000000n, true);
             return 0;
-        } catch (_) { return 1; }
+        } catch (e: any) { return e.name === "NotFound" ? 44 : 20; }
     },
     path_create_directory: (fd: number, path_ptr: number, path_len: number): number => {
         const p = readString(path_ptr, path_len);
         const parent = openFds.get(fd);
         if (!parent) return 8;
-        try { Deno.mkdirSync(toHostPath(p, parent.path)); return 0; } catch (_) { return 1; }
+        try { Deno.mkdirSync(toHostPath(p, parent.path)); return 0; } catch (e: any) { return e.name === "AlreadyExists" ? 20 : 44; }
     },
     fd_readdir: (fd: number, buf_ptr: number, buf_len: number, cookie: bigint, nwritten_ptr: number): number => {
         const entry = openFds.get(fd);
@@ -248,34 +253,55 @@ const wasi_snapshot_preview1 = {
             }
             getView().setUint32(nwritten_ptr, nwritten, true);
             return 0;
-        } catch (_) { return 1; }
+        } catch (e: any) { return e.name === "NotFound" ? 44 : 20; }
     },
     random_get: (ptr: number, len: number): number => { crypto.getRandomValues(getMemory().subarray(ptr, ptr + len)); return 0; },
     clock_time_get: (_id: number, _precision: bigint, ptr: number) => { getView().setBigUint64(ptr, BigInt(Date.now()) * 1000000n, true); return 0; },
-    poll_oneoff: () => 0,
+    poll_oneoff: () => 52,
     fd_datasync: () => 0,
     fd_sync: () => 0,
-    fd_fdstat_set_flags: () => 0,
-    fd_fdstat_set_rights: () => 0,
-    fd_advise: () => 0,
-    fd_allocate: () => 0,
-    path_link: () => 0,
-    path_readlink: () => 0,
-    path_remove_directory: () => 0,
-    path_rename: () => 0,
-    path_symlink: () => 0,
-    path_unlink_file: () => 0,
-    path_filestat_set_times: () => 0,
-    fd_filestat_set_size: () => 0,
-    fd_filestat_set_times: () => 0,
-    fd_renumber: () => 0,
-    fd_tell: () => 0,
-    proc_raise: () => 0,
-    sched_yield: () => 0,
-    sock_recv: () => 0,
-    sock_send: () => 0,
-    sock_shutdown: () => 0,
-    sock_accept: () => 0,
+    fd_fdstat_set_flags: () => 52,
+    fd_fdstat_set_rights: () => 52,
+    fd_advise: () => 52,
+    fd_allocate: () => 52,
+    path_link: () => 52,
+    path_readlink: () => 28,
+    path_remove_directory: (fd: number, path_ptr: number, path_len: number): number => {
+        const p = readString(path_ptr, path_len);
+        const parent = openFds.get(fd);
+        if (!parent) return 8;
+        try { Deno.removeSync(toHostPath(p, parent.path)); return 0; } catch (_) { return 44; }
+    },
+    path_rename: (fd: number, old_path_ptr: number, old_path_len: number, new_fd: number, new_path_ptr: number, new_path_len: number): number => {
+        const old_p = readString(old_path_ptr, old_path_len);
+        const new_p = readString(new_path_ptr, new_path_len);
+        const parent_old = openFds.get(fd);
+        const parent_new = openFds.get(new_fd);
+        if (!parent_old || !parent_new) return 8;
+        try { Deno.renameSync(toHostPath(old_p, parent_old.path), toHostPath(new_p, parent_new.path)); return 0; } catch (_) { return 44; }
+    },
+    path_symlink: () => 52,
+    path_unlink_file: (fd: number, path_ptr: number, path_len: number): number => {
+        const p = readString(path_ptr, path_len);
+        const parent = openFds.get(fd);
+        if (!parent) return 8;
+        try { Deno.removeSync(toHostPath(p, parent.path)); return 0; } catch (_) { return 44; }
+    },
+    path_filestat_set_times: () => 52,
+    fd_filestat_set_size: (fd: number, size: bigint): number => {
+        const entry = openFds.get(fd);
+        if (!entry || !entry.file) return 8;
+        try { entry.file.truncateSync(Number(size)); return 0; } catch (_) { return 44; }
+    },
+    fd_filestat_set_times: () => 52,
+    fd_renumber: () => 52,
+    fd_tell: () => 52,
+    proc_raise: () => 52,
+    sched_yield: () => 52,
+    sock_recv: () => 52,
+    sock_send: () => 52,
+    sock_shutdown: () => 52,
+    sock_accept: () => 52,
 };
 
 const envImports = {
@@ -296,12 +322,48 @@ const envImports = {
     },
     wasi_ext_spawn: (programPtr: number, programLen: number, argsPtr: number, argsLen: number, envPtr: number, envLen: number, _cwdPtr: number, _cwdLen: number, outExitCode: number, outStdoutPtr: number, outStdoutLen: number, outStderrPtr: number, outStderrLen: number): number => {
         try {
-            const program = readString(programPtr, programLen);
+            let program = readString(programPtr, programLen);
+            if (program.startsWith('/home/')) program = '/home/oligami/' + program.slice('/home/'.length);
+            if (program.startsWith('/target/')) program = '/tmp/test_project/target/' + program.slice('/target/'.length);
             const sub = getMemory().subarray(argsPtr, argsPtr + argsLen);
-            const args: string[] = []; let st = 0;
+            let args: string[] = []; let st = 0;
             for (let i = 0; i < sub.length; i++) { if (sub[i] === 0) { args.push(new TextDecoder().decode(sub.subarray(st, i))); st = i + 1; } }
-            console.log(`[Host] Spawning: ${program} ${args.join(' ')}`);
-            const cmd = new Deno.Command(program, { args, stdout: "piped", stderr: "piped" });
+            args = args.map(s => {
+                let res = s;
+                res = res.replaceAll('/home/', '/home/oligami/');
+                res = res.replaceAll('/target/', '/tmp/test_project/target/');
+                return res;
+            });
+            let cwd = readString(_cwdPtr, _cwdLen);
+            if (cwd.startsWith('/home/')) cwd = '/home/oligami/' + cwd.slice('/home/'.length);
+            if (cwd.startsWith('/target/')) cwd = '/tmp/test_project/target/' + cwd.slice('/target/'.length);
+            if (!cwd || cwd === "/") cwd = "/tmp/test_project";
+
+            const envSub = getMemory().subarray(envPtr, envPtr + envLen);
+            let env: Record<string, string> = {};
+            let envSt = 0;
+            for (let i = 0; i < envSub.length; i++) {
+                if (envSub[i] === 0) {
+                    const pair = new TextDecoder().decode(envSub.subarray(envSt, i));
+                    const eqIdx = pair.indexOf('=');
+                    if (eqIdx !== -1) {
+                        let k = pair.slice(0, eqIdx);
+                        let v = pair.slice(eqIdx + 1);
+                        v = v.replaceAll('/home/', '/home/oligami/');
+                        v = v.replaceAll('/target/', '/tmp/test_project/target/');
+                        env[k] = v;
+                    }
+                    envSt = i + 1;
+                }
+            }
+
+            console.log(`[Host] Spawning: ${program} ${args.join(' ')} in ${cwd}`);
+            const cmd = new Deno.Command(program, { args, cwd, env, stdout: "piped", stderr: "piped" });
+            try {
+                Deno.chmodSync(program, 0o755);
+            } catch (e) {
+                // ignore
+            }
             const output = cmd.outputSync();
             const sPtr = wasiExtAllocate(output.stdout.length); getMemory().set(output.stdout, sPtr);
             const ePtr = wasiExtAllocate(output.stderr.length); getMemory().set(output.stderr, ePtr);

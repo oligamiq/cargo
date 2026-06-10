@@ -43,32 +43,16 @@ impl<T> Queue<T> {
         self.popper_cv.notify_one();
     }
 
-    /// Pushes an item onto the queue, blocking if the queue is full.
     pub fn push_bounded(&self, item: T) {
-        let locked_state = self.state.lock().unwrap();
-        let mut state = self
-            .bounded_cv
-            .wait_while(locked_state, |s| s.items.len() >= self.bound)
-            .unwrap();
-        state.items.push_back(item);
-        self.popper_cv.notify_one();
+        self.push(item);
     }
 
-    /// Pops an item from the queue, blocking if the queue is empty.
-    pub fn pop(&self, timeout: Duration) -> Option<T> {
-        let (mut state, result) = self
-            .popper_cv
-            .wait_timeout_while(self.state.lock().unwrap(), timeout, |s| s.items.is_empty())
-            .unwrap();
-        if result.timed_out() {
+    pub fn pop(&self, _timeout: Duration) -> Option<T> {
+        let mut state = self.state.lock().unwrap();
+        if state.items.is_empty() {
             None
         } else {
-            let value = state.items.pop_front()?;
-            if state.items.len() < self.bound {
-                // Assumes threads cannot be canceled.
-                self.bounded_cv.notify_one();
-            }
-            Some(value)
+            state.items.pop_front()
         }
     }
 

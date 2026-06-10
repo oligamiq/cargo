@@ -526,13 +526,14 @@ impl<'gctx> JobQueue<'gctx> {
 
         // Create a helper thread for acquiring jobserver tokens
         let messages = state.messages.clone();
-        let helper = build_runner
-            .jobserver
-            .clone()
-            .into_helper_thread(move |token| {
-                messages.push(Message::Token(token));
-            })
-            .context("failed to create helper thread for jobserver management")?;
+        let helper = None;
+        for _ in 0..100 {
+            if let Ok(Some(token)) = build_runner.jobserver.try_acquire() {
+                state.messages.push(Message::Token(Ok(token)));
+            } else {
+                break;
+            }
+        }
 
         // Create a helper thread to manage the diagnostics for rustfix if
         // necessary.
@@ -548,19 +549,16 @@ impl<'gctx> JobQueue<'gctx> {
             .take()
             .map(move |srv| srv.start(move |msg| messages.push(Message::FixDiagnostic(msg))));
 
-        thread::scope(move |scope| {
-            let (result,) = state.drain_the_queue(build_runner, scope, &helper);
-            result
-        })
+        let (result,) = state.drain_the_queue(build_runner, &helper);
+        result
     }
 }
 
 impl<'gctx> DrainState<'gctx> {
-    fn spawn_work_if_possible<'s>(
+    fn spawn_work_if_possible(
         &mut self,
         build_runner: &mut BuildRunner<'_, '_>,
-        jobserver_helper: &HelperThread,
-        scope: &'s Scope<'s, '_>,
+        jobserver_helper: &Option<jobserver::HelperThread>,
     ) -> CargoResult<()> {
         // Dequeue as much work as we can, learning about everything
         // possible that can run. Note that this is also the point where we
@@ -577,7 +575,9 @@ impl<'gctx> DrainState<'gctx> {
                 .partition_point(|&(_, _, p)| p <= priority);
             self.pending_queue.insert(idx, (unit, job, priority));
             if self.active.len() + self.pending_queue.len() > 1 {
-                jobserver_helper.request_token();
+                if let Some(helper) = jobserver_helper {
+                    helper.request_token();
+                }
             }
         }
 
@@ -600,7 +600,7 @@ impl<'gctx> DrainState<'gctx> {
                 &unit,
                 job.freshness(),
             )?;
-            self.run(&unit, job, build_runner, scope);
+            self.run(&unit, job, build_runner);
         }
 
         Ok(())
@@ -794,11 +794,10 @@ impl<'gctx> DrainState<'gctx> {
     /// This returns a tuple of `Result` to prevent the use of `?` on
     /// `Result` types because it is important for the loop to
     /// carefully handle errors.
-    fn drain_the_queue<'s>(
+    fn drain_the_queue(
         mut self,
         build_runner: &mut BuildRunner<'_, '_>,
-        scope: &'s Scope<'s, '_>,
-        jobserver_helper: &HelperThread,
+        jobserver_helper: &Option<jobserver::HelperThread>,
     ) -> (Result<(), anyhow::Error>,) {
         trace!("queue: {:#?}", self.queue);
 
@@ -819,7 +818,7 @@ impl<'gctx> DrainState<'gctx> {
         // drain event messages.
         loop {
             if errors.count == 0 || build_runner.bcx.build_config.keep_going {
-                if let Err(e) = self.spawn_work_if_possible(build_runner, jobserver_helper, scope) {
+                if let Err(e) = self.spawn_work_if_possible(build_runner, jobserver_helper) {
                     self.handle_error(&mut build_runner.bcx.gctx.shell(), &mut errors, e);
                 }
             }
@@ -987,12 +986,11 @@ impl<'gctx> DrainState<'gctx> {
     ///
     /// Fresh jobs block until finished (which should be very fast!), Dirty
     /// jobs will spawn a thread in the background and return immediately.
-    fn run<'s>(
+    fn run(
         &mut self,
         unit: &Unit,
         job: Job,
         build_runner: &BuildRunner<'_, '_>,
-        scope: &'s Scope<'s, '_>,
     ) {
         let id = JobId(self.next_id);
         self.next_id = self.next_id.checked_add(1).unwrap();
@@ -1021,12 +1019,10 @@ impl<'gctx> DrainState<'gctx> {
 
         match is_fresh {
             true => {
-                // Running a fresh job on the same thread is often much faster than spawning a new
-                // thread to run the job.
                 doit(Some(&self.diag_dedupe));
             }
             false => {
-                scope.spawn(move || doit(None));
+                doit(None);
             }
         }
     }

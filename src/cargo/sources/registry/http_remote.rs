@@ -488,8 +488,8 @@ impl<'gctx> HttpBackend<'gctx> {
             match r.r#try(|| response) {
                 RetryResult::Success(result) => break Ok(result),
                 RetryResult::Err(error) => break Err(error),
-                RetryResult::Retry(delay_ms) => {
-                    futures_timer::Delay::new(Duration::from_millis(delay_ms)).await;
+                RetryResult::Retry(_delay_ms) => {
+                    std::future::ready(()).await;
                 }
             }
         };

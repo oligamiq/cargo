@@ -152,6 +152,7 @@ impl Drop for LockServerStarted {
         if TcpStream::connect(&self.addr).is_err() {
             return;
         }
+        #[cfg(not(target_os = "wasi"))]
         drop(self.thread.take().unwrap().join());
     }
 }
