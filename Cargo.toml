@@ -248,6 +248,7 @@ unicode-ident.workspace = true
 url.workspace = true
 walkdir.workspace = true
 winnow.workspace = true
+parking_lot_core = { version = "0.9.12", features = ["nightly"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

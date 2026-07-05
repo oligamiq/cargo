@@ -406,6 +406,7 @@ dependencies = [
  "openssl",
  "openssl-src",
  "os_info",
+ "parking_lot_core",
  "pasetors",
  "pathdiff",
  "portable-atomic",

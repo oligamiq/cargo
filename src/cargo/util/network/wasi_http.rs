@@ -11,7 +11,7 @@ pub enum Method {
 }
 
 #[cfg(target_os = "wasi")]
-#[link(wasm_import_module = "env")]
+#[link(wasm_import_module = "__wasip1_vfs-host")]
 unsafe extern "C" {
     /// Fetches a URL.
     ///
@@ -39,10 +39,7 @@ unsafe extern "C" {
         dest_len: usize,
     ) -> i32;
 
-    fn wasi_ext_git_fetch(
-        path_ptr: *const u8,
-        path_len: usize,
-    ) -> i32;
+    fn wasi_ext_git_fetch(path_ptr: *const u8, path_len: usize) -> i32;
 
     fn wasi_ext_spawn(
         program_ptr: *const u8,
@@ -71,7 +68,7 @@ pub fn wasi_spawn(
     use std::io::Write;
 
     let program_s = program.to_string_lossy();
-    
+
     let mut args_buf = Vec::new();
     for arg in args {
         write!(args_buf, "{}\0", arg.to_string_lossy()).unwrap();
@@ -203,14 +200,7 @@ pub fn fetch_wasi(
 
 #[cfg(target_os = "wasi")]
 pub fn wasi_git_clone(url: &str, dest: &str, _options: Option<()>) -> Result<(), String> {
-    let res = unsafe {
-        wasi_ext_git_clone(
-            url.as_ptr(),
-            url.len(),
-            dest.as_ptr(),
-            dest.len(),
-        )
-    };
+    let res = unsafe { wasi_ext_git_clone(url.as_ptr(), url.len(), dest.as_ptr(), dest.len()) };
     if res == 0 {
         Ok(())
     } else {
@@ -220,12 +210,7 @@ pub fn wasi_git_clone(url: &str, dest: &str, _options: Option<()>) -> Result<(),
 
 #[cfg(target_os = "wasi")]
 pub fn wasi_git_fetch(repo_path: &str) -> Result<(), String> {
-    let res = unsafe {
-        wasi_ext_git_fetch(
-            repo_path.as_ptr(),
-            repo_path.len(),
-        )
-    };
+    let res = unsafe { wasi_ext_git_fetch(repo_path.as_ptr(), repo_path.len()) };
     if res == 0 {
         Ok(())
     } else {

@@ -312,7 +312,7 @@ impl ProcessBuilder {
             // I should define the FFI in cargo-util or move the logic.
             // Let's define the FFI here too as it's just raw extern C.
             
-            #[link(wasm_import_module = "env")]
+            #[link(wasm_import_module = "__wasip1_vfs-host")]
             unsafe extern "C" {
                 fn wasi_ext_spawn(
                     program_ptr: *const u8, program_len: usize,
