@@ -1,5 +1,10 @@
 //! Bridge for WASI using `extern "C"` imports to provide HTTP and Git functionality.
 
+#[cfg(any(target_os = "wasi", test))]
+fn empty_stdin() -> &'static [u8] {
+    &b"\0"[..0]
+}
+
 #[cfg(target_os = "wasi")]
 pub enum Method {
     Get,
@@ -50,6 +55,8 @@ unsafe extern "C" {
         env_len: usize,
         cwd_ptr: *const u8,
         cwd_len: usize,
+        stdin_ptr: *const u8,
+        stdin_len: usize,
         out_exit_code: *mut i32,
         out_stdout_ptr: *mut *mut u8,
         out_stdout_len: *mut usize,
@@ -82,6 +89,7 @@ pub fn wasi_spawn(
     }
 
     let cwd_s = cwd.map(|c| c.to_string_lossy()).unwrap_or_default();
+    let stdin = empty_stdin();
 
     let mut out_exit_code: i32 = 0;
     let mut out_stdout_ptr: *mut u8 = std::ptr::null_mut();
@@ -99,6 +107,8 @@ pub fn wasi_spawn(
             env_buf.len(),
             cwd_s.as_ptr(),
             cwd_s.len(),
+            stdin.as_ptr(),
+            stdin.len(),
             &mut out_exit_code,
             &mut out_stdout_ptr,
             &mut out_stdout_len,
@@ -231,4 +241,17 @@ pub extern "C" fn wasi_ext_allocate(size: usize) -> *mut u8 {
     let ptr = buf.as_mut_ptr();
     std::mem::forget(buf);
     ptr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::empty_stdin;
+
+    #[test]
+    fn wasi_spawn_empty_stdin_has_valid_pointer() {
+        let stdin = empty_stdin();
+        assert_eq!(stdin.len(), 0);
+        assert_ne!(stdin.as_ptr() as usize, 0);
+        assert!(stdin.as_ptr().is_aligned());
+    }
 }

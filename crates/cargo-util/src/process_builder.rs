@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::{self};
+use std::io;
+#[cfg(not(target_os = "wasi"))]
+use std::io::Write;
 use std::iter::once;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output, Stdio};
@@ -230,6 +232,11 @@ impl ProcessBuilder {
         self
     }
 
+    #[cfg(any(target_os = "wasi", test))]
+    fn stdin_bytes(&self) -> &[u8] {
+        self.stdin.as_deref().unwrap_or_default()
+    }
+
     fn should_retry_with_argfile(&self, err: &io::Error) -> bool {
         self.retry_with_argfile && imp::command_line_too_big(err)
     }
@@ -319,6 +326,7 @@ impl ProcessBuilder {
                     args_ptr: *const u8, args_len: usize,
                     env_ptr: *const u8, env_len: usize,
                     cwd_ptr: *const u8, cwd_len: usize,
+                    stdin_ptr: *const u8, stdin_len: usize,
                     out_exit_code: *mut i32,
                     out_stdout_ptr: *mut *mut u8, out_stdout_len: *mut usize,
                     out_stderr_ptr: *mut *mut u8, out_stderr_len: *mut usize,
@@ -341,6 +349,7 @@ impl ProcessBuilder {
                 }
             }
             let cwd_s = self.cwd.as_ref().map(|c| c.to_string_lossy()).unwrap_or_default();
+            let stdin = self.stdin_bytes();
 
             let mut out_exit_code: i32 = 0;
             let mut out_stdout_ptr: *mut u8 = std::ptr::null_mut();
@@ -354,6 +363,7 @@ impl ProcessBuilder {
                     args_buf.as_ptr(), args_buf.len(),
                     env_buf.as_ptr(), env_buf.len(),
                     cwd_s.as_ptr(), cwd_s.len(),
+                    stdin.as_ptr(), stdin.len(),
                     &mut out_exit_code,
                     &mut out_stdout_ptr, &mut out_stdout_len,
                     &mut out_stderr_ptr, &mut out_stderr_len,
@@ -792,6 +802,19 @@ mod imp {
 mod tests {
     use super::ProcessBuilder;
     use std::fs;
+
+    #[test]
+    fn wasi_spawn_stdin_defaults_to_eof() {
+        let process = ProcessBuilder::new("rustc");
+        assert_eq!(process.stdin_bytes(), b"");
+    }
+
+    #[test]
+    fn wasi_spawn_stdin_preserves_raw_bytes() {
+        let mut process = ProcessBuilder::new("rustc");
+        process.stdin([0xff, 0x00, b'r', b's']);
+        assert_eq!(process.stdin_bytes(), &[0xff, 0x00, b'r', b's']);
+    }
 
     #[test]
     fn argfile_build_succeeds() {

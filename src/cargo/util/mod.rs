@@ -76,8 +76,71 @@ mod vcs;
 mod workspace;
 
 pub use cargo_util_terminal::style;
+#[cfg(not(target_os = "wasi"))]
 pub(crate) use futures::executor::block_on;
+#[cfg(not(target_os = "wasi"))]
 pub(crate) use futures::executor::block_on_stream;
+
+#[cfg(target_os = "wasi")]
+pub(crate) use wasi_block_on as block_on;
+#[cfg(target_os = "wasi")]
+pub(crate) use wasi_block_on_stream as block_on_stream;
+
+#[cfg(any(target_os = "wasi", test))]
+struct WasiWake {
+    notified: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(any(target_os = "wasi", test))]
+impl futures::task::ArcWake for WasiWake {
+    fn wake_by_ref(arc_self: &std::sync::Arc<Self>) {
+        arc_self
+            .notified
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+#[cfg(any(target_os = "wasi", test))]
+pub(crate) fn wasi_block_on<F: std::future::Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let wake = std::sync::Arc::new(WasiWake {
+        notified: std::sync::atomic::AtomicBool::new(false),
+    });
+    let waker = futures::task::waker(wake.clone());
+    let mut context = std::task::Context::from_waker(&waker);
+
+    loop {
+        wake.notified
+            .swap(false, std::sync::atomic::Ordering::AcqRel);
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(output) => return output,
+            std::task::Poll::Pending => {
+                while !wake.notified.load(std::sync::atomic::Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "wasi", test))]
+pub(crate) struct WasiBlockingStream<S> {
+    stream: S,
+}
+
+#[cfg(any(target_os = "wasi", test))]
+impl<S: futures::Stream + Unpin> Iterator for WasiBlockingStream<S> {
+    type Item = S::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        wasi_block_on(futures::StreamExt::next(&mut self.stream))
+    }
+}
+
+#[cfg(any(target_os = "wasi", test))]
+pub(crate) fn wasi_block_on_stream<S: futures::Stream + Unpin>(stream: S) -> WasiBlockingStream<S> {
+    WasiBlockingStream { stream }
+}
 
 pub fn is_rustup() -> bool {
     #[expect(clippy::disallowed_methods, reason = "consistency with rustup")]
@@ -210,5 +273,114 @@ mod test {
             &format!("{:.3}", HumanBytes((1024. * 1.23456) as u64)),
             "1.234KiB"
         );
+    }
+
+    #[test]
+    fn wasi_block_on_ready() {
+        assert_eq!(wasi_block_on(async { 42 }), 42);
+    }
+
+    #[test]
+    fn wasi_block_on_yields_once() {
+        let mut pending = true;
+        let future = futures::future::poll_fn(|cx| {
+            if std::mem::take(&mut pending) {
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(42)
+            }
+        });
+
+        assert_eq!(wasi_block_on(future), 42);
+    }
+
+    #[test]
+    fn wasi_block_on_stream_drains_finite_stream() {
+        let values = wasi_block_on_stream(futures::stream::iter([1, 2, 3])).collect::<Vec<_>>();
+
+        assert_eq!(values, [1, 2, 3]);
+    }
+
+    #[test]
+    fn wasi_block_on_stream_handles_empty_futures_unordered() {
+        let futures = futures::stream::FuturesUnordered::<futures::future::Ready<usize>>::new();
+
+        assert_eq!(wasi_block_on_stream(futures).next(), None);
+    }
+
+    #[test]
+    fn wasi_block_on_stream_waits_for_pending_child_wake() {
+        let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut futures = futures::stream::FuturesUnordered::new();
+        futures.push(futures::future::poll_fn({
+            let ready = ready.clone();
+            move |cx| {
+                if ready.load(std::sync::atomic::Ordering::Acquire) {
+                    return std::task::Poll::Ready(42);
+                }
+                let ready = ready.clone();
+                let waker = cx.waker().clone();
+                std::thread::spawn(move || {
+                    ready.store(true, std::sync::atomic::Ordering::Release);
+                    waker.wake();
+                });
+                std::task::Poll::Pending
+            }
+        }));
+
+        assert_eq!(wasi_block_on_stream(futures).collect::<Vec<_>>(), [42]);
+    }
+
+    #[test]
+    fn wasi_block_on_stream_waits_for_multiple_pending_children() {
+        fn pending_once(value: usize) -> impl std::future::Future<Output = usize> {
+            let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            futures::future::poll_fn(move |cx| {
+                if ready.load(std::sync::atomic::Ordering::Acquire) {
+                    return std::task::Poll::Ready(value);
+                }
+                let ready = ready.clone();
+                let waker = cx.waker().clone();
+                std::thread::spawn(move || {
+                    ready.store(true, std::sync::atomic::Ordering::Release);
+                    waker.wake();
+                });
+                std::task::Poll::Pending
+            })
+        }
+
+        let mut futures = futures::stream::FuturesUnordered::new();
+        futures.push(pending_once(1));
+        futures.push(pending_once(2));
+
+        let mut values = wasi_block_on_stream(futures).collect::<Vec<_>>();
+        values.sort_unstable();
+        assert_eq!(values, [1, 2]);
+    }
+
+    #[test]
+    fn wasi_block_on_waits_for_wake_from_another_thread() {
+        let notified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut first_poll = true;
+        let future = futures::future::poll_fn({
+            let notified = notified.clone();
+            move |cx| {
+                if std::mem::take(&mut first_poll) {
+                    let notified = notified.clone();
+                    let waker = cx.waker().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        notified.store(true, std::sync::atomic::Ordering::Release);
+                        waker.wake();
+                    });
+                    return std::task::Poll::Pending;
+                }
+                assert!(notified.load(std::sync::atomic::Ordering::Acquire));
+                std::task::Poll::Ready(42)
+            }
+        });
+
+        assert_eq!(wasi_block_on(future), 42);
     }
 }

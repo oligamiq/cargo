@@ -320,8 +320,9 @@ const envImports = {
             return 0;
         } catch (_) { return 1; }
     },
-    wasi_ext_spawn: (programPtr: number, programLen: number, argsPtr: number, argsLen: number, envPtr: number, envLen: number, _cwdPtr: number, _cwdLen: number, outExitCode: number, outStdoutPtr: number, outStdoutLen: number, outStderrPtr: number, outStderrLen: number): number => {
+    wasi_ext_spawn: (programPtr: number, programLen: number, argsPtr: number, argsLen: number, envPtr: number, envLen: number, _cwdPtr: number, _cwdLen: number, stdinPtr: number, stdinLen: number, outExitCode: number, outStdoutPtr: number, outStdoutLen: number, outStderrPtr: number, outStderrLen: number): number => {
         try {
+            const stdin = getMemory().slice(stdinPtr, stdinPtr + stdinLen);
             let program = readString(programPtr, programLen);
             if (program.startsWith('/home/')) program = '/home/oligami/' + program.slice('/home/'.length);
             if (program.startsWith('/target/')) program = '/tmp/test_project/target/' + program.slice('/target/'.length);
@@ -358,13 +359,29 @@ const envImports = {
             }
 
             console.log(`[Host] Spawning: ${program} ${args.join(' ')} in ${cwd}`);
-            const cmd = new Deno.Command(program, { args, cwd, env, stdout: "piped", stderr: "piped" });
             try {
                 Deno.chmodSync(program, 0o755);
             } catch (e) {
                 // ignore
             }
-            const output = cmd.outputSync();
+            let output: Deno.CommandOutput;
+            if (stdin.length > 0) {
+                const inputPath = Deno.makeTempFileSync();
+                try {
+                    Deno.writeFileSync(inputPath, stdin);
+                    output = new Deno.Command("sh", {
+                        args: ["-c", 'exec "$@" < "$0"', inputPath, program, ...args],
+                        cwd,
+                        env,
+                        stdout: "piped",
+                        stderr: "piped",
+                    }).outputSync();
+                } finally {
+                    Deno.removeSync(inputPath);
+                }
+            } else {
+                output = new Deno.Command(program, { args, cwd, env, stdout: "piped", stderr: "piped" }).outputSync();
+            }
             const sPtr = wasiExtAllocate(output.stdout.length); getMemory().set(output.stdout, sPtr);
             const ePtr = wasiExtAllocate(output.stderr.length); getMemory().set(output.stderr, ePtr);
             getView().setInt32(outExitCode, output.code, true);

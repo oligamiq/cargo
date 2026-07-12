@@ -394,7 +394,8 @@ pub fn create_bcx<'a, 'gctx>(
         );
     }
 
-    let profiles = Profiles::new(ws, build_config.requested_profile)?;
+    let profiles =
+        Profiles::new_with_rustc_host(ws, build_config.requested_profile, target_data.rustc.host)?;
     profiles.validate_packages(
         ws.profiles(),
         &mut gctx.shell(),

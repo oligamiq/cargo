@@ -89,14 +89,16 @@ where
 
     /// Run all pending futures. Returns true if there was no work to do.
     pub fn wait(&mut self) -> bool {
-        let is_empty = self.pool.is_empty();
+        if self.pool.is_empty() {
+            return true;
+        }
         for (k, v) in crate::util::block_on_stream(&mut self.pool) {
             *self
                 .cache
                 .get_mut(&k)
                 .expect("all pending work is in the cache") = Poll::Ready(v);
         }
-        is_empty
+        false
     }
 }
 

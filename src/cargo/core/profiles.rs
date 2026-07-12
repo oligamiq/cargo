@@ -68,13 +68,21 @@ pub struct Profiles {
 
 impl Profiles {
     pub fn new(ws: &Workspace<'_>, requested_profile: InternedString) -> CargoResult<Profiles> {
+        let rustc_host = ws.gctx().load_global_rustc(Some(ws))?.host;
+        Self::new_with_rustc_host(ws, requested_profile, rustc_host)
+    }
+
+    pub(crate) fn new_with_rustc_host(
+        ws: &Workspace<'_>,
+        requested_profile: InternedString,
+        rustc_host: InternedString,
+    ) -> CargoResult<Profiles> {
         let gctx = ws.gctx();
         let incremental = match gctx.get_env_os("CARGO_INCREMENTAL") {
             Some(v) => Some(v == "1"),
             None => gctx.build_config()?.incremental,
         };
         let mut profiles = merge_config_profiles(ws, requested_profile)?;
-        let rustc_host = ws.gctx().load_global_rustc(Some(ws))?.host;
 
         let mut profile_makers = Profiles {
             incremental,

@@ -784,6 +784,65 @@ pub fn strip_prefix_canonical(
     canon_path.strip_prefix(canon_base).map(|p| p.to_path_buf())
 }
 
+#[cfg(any(target_os = "wasi", test))]
+const WASI_TEMP_DIR_RETRIES: u64 = 1024;
+
+#[cfg(any(target_os = "wasi", test))]
+static WASI_TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(any(target_os = "wasi", test))]
+#[derive(Debug)]
+struct WasiTempDir {
+    path: Option<PathBuf>,
+}
+
+#[cfg(any(target_os = "wasi", test))]
+impl WasiTempDir {
+    fn new(parent: &Path) -> io::Result<Self> {
+        Self::new_with_counter(parent, &WASI_TEMP_DIR_COUNTER, WASI_TEMP_DIR_RETRIES)
+    }
+
+    fn new_with_counter(
+        parent: &Path,
+        counter: &std::sync::atomic::AtomicU64,
+        retries: u64,
+    ) -> io::Result<Self> {
+        let mut last_collision = None;
+        for _ in 0..retries {
+            let id = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = parent.join(format!(".cargo-tmp-{id}"));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path: Some(path) }),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    last_collision = Some(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last_collision.unwrap_or_else(|| {
+            io::Error::new(io::ErrorKind::AlreadyExists, "temporary directory retries exhausted")
+        }))
+    }
+
+    fn path(&self) -> &Path {
+        self.path.as_deref().unwrap()
+    }
+
+    fn keep(mut self) {
+        self.path = None;
+    }
+}
+
+#[cfg(any(target_os = "wasi", test))]
+impl Drop for WasiTempDir {
+    fn drop(&mut self) {
+        if let Some(path) = &self.path {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
 /// Creates an excluded from cache directory atomically with its parents as needed.
 ///
 /// The atomicity only covers creating the leaf directory and exclusion from cache. Any missing
@@ -798,6 +857,7 @@ pub fn create_dir_all_excluded_from_backups_atomic(p: impl AsRef<Path>) -> Resul
     }
 
     let parent = path.parent().unwrap();
+    #[cfg(not(target_os = "wasi"))]
     let base = path.file_name().unwrap();
     create_dir_all(parent)?;
     // We do this in two steps (first create a temporary directory and exclude
@@ -811,6 +871,9 @@ pub fn create_dir_all_excluded_from_backups_atomic(p: impl AsRef<Path>) -> Resul
     // We need the tempdir created in parent instead of $TMP, because only then we can be
     // easily sure that rename() will succeed (the new name needs to be on the same mount
     // point as the old one).
+    #[cfg(target_os = "wasi")]
+    let tempdir = WasiTempDir::new(parent)?;
+    #[cfg(not(target_os = "wasi"))]
     let tempdir = TempFileBuilder::new().prefix(base).tempdir_in(parent)?;
     exclude_from_backups(tempdir.path());
     exclude_from_content_indexing(tempdir.path());
@@ -820,11 +883,21 @@ pub fn create_dir_all_excluded_from_backups_atomic(p: impl AsRef<Path>) -> Resul
     // hence the check below to follow the existing behavior. If we get an error at
     // rename() and suddenly the directory (which didn't exist a moment earlier) exists
     // we can infer from it's another cargo process doing work.
+    #[cfg(not(target_os = "wasi"))]
     if let Err(e) = fs::rename(tempdir.path(), path) {
         if !path.exists() {
             return Err(anyhow::Error::from(e))
                 .with_context(|| format!("failed to create directory `{}`", path.display()));
         }
+    }
+    #[cfg(target_os = "wasi")]
+    match fs::rename(tempdir.path(), path) {
+        Ok(()) => tempdir.keep(),
+        Err(e) if !path.exists() => {
+            return Err(anyhow::Error::from(e))
+                .with_context(|| format!("failed to create directory `{}`", path.display()));
+        }
+        Err(_) => {}
     }
     Ok(())
 }
@@ -935,6 +1008,72 @@ mod tests {
     use super::normalize_path;
     use super::write;
     use super::write_atomic;
+
+    #[test]
+    fn wasi_temp_dir_creates_unique_children_and_exposes_paths() {
+        let parent = tempfile::tempdir().unwrap();
+
+        let first = super::WasiTempDir::new(parent.path()).unwrap();
+        let second = super::WasiTempDir::new(parent.path()).unwrap();
+
+        assert_eq!(first.path().parent(), Some(parent.path()));
+        assert_eq!(second.path().parent(), Some(parent.path()));
+        assert_ne!(first.path(), second.path());
+        assert!(first.path().is_dir());
+        assert!(second.path().is_dir());
+    }
+
+    #[test]
+    fn wasi_temp_dir_retries_already_existing_paths() {
+        let parent = tempfile::tempdir().unwrap();
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        let collision = parent.path().join(".cargo-tmp-0");
+        std::fs::create_dir(&collision).unwrap();
+
+        let tempdir = super::WasiTempDir::new_with_counter(parent.path(), &counter, 2).unwrap();
+
+        assert_ne!(tempdir.path(), collision);
+        assert!(tempdir.path().is_dir());
+    }
+
+    #[test]
+    fn wasi_temp_dir_removes_directory_on_drop() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = {
+            let tempdir = super::WasiTempDir::new(parent.path()).unwrap();
+            tempdir.path().to_owned()
+        };
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn wasi_temp_dir_keep_relinquishes_cleanup_after_rename() {
+        let parent = tempfile::tempdir().unwrap();
+        let tempdir = super::WasiTempDir::new(parent.path()).unwrap();
+        let old_path = tempdir.path().to_owned();
+        let final_path = parent.path().join("target");
+        std::fs::rename(&old_path, &final_path).unwrap();
+        std::fs::create_dir(&old_path).unwrap();
+
+        tempdir.keep();
+
+        assert!(old_path.is_dir());
+        assert!(final_path.is_dir());
+    }
+
+    #[test]
+    fn wasi_temp_dir_returns_already_exists_after_collision_limit() {
+        let parent = tempfile::tempdir().unwrap();
+        let counter = std::sync::atomic::AtomicU64::new(0);
+        for id in 0..2 {
+            std::fs::create_dir(parent.path().join(format!(".cargo-tmp-{id}"))).unwrap();
+        }
+
+        let error = super::WasiTempDir::new_with_counter(parent.path(), &counter, 2).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    }
 
     #[test]
     fn test_normalize_path() {
