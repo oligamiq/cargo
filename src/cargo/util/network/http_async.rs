@@ -1,19 +1,28 @@
 //! Async wrapper around cURL for making managing HTTP requests.
 //!
-//! Requests are executed in parallel using cURL [`Multi`] on
-//! a worker thread that is owned by the Client.
+//! On non-WASI targets, requests are executed in parallel using cURL [`Multi`]
+//! on a worker thread that is owned by the Client.
 
+#[cfg(not(target_os = "wasi"))]
 use std::collections::HashMap;
+#[cfg(not(target_os = "wasi"))]
 use std::io::Cursor;
+#[cfg(not(target_os = "wasi"))]
 use std::io::Read;
+#[cfg(not(target_os = "wasi"))]
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+#[cfg(not(target_os = "wasi"))]
 use std::sync::mpsc;
+#[cfg(not(target_os = "wasi"))]
 use std::sync::mpsc::Receiver;
+#[cfg(not(target_os = "wasi"))]
 use std::sync::mpsc::Sender;
+#[cfg(not(target_os = "wasi"))]
 use std::thread::JoinHandle;
 use std::time::Duration;
+#[cfg(not(target_os = "wasi"))]
 use std::time::Instant;
 
 #[cfg(not(target_os = "wasi"))]
@@ -28,12 +37,16 @@ use curl::easy::WriteError;
 use curl::multi::Easy2Handle;
 #[cfg(not(target_os = "wasi"))]
 use curl::multi::Multi;
+#[cfg(not(target_os = "wasi"))]
 use futures::channel::oneshot;
 use portable_atomic::AtomicI64;
+#[cfg(not(target_os = "wasi"))]
 use portable_atomic::AtomicU64;
-use tracing::{debug, error, trace, warn};
+#[cfg(not(target_os = "wasi"))]
+use tracing::{debug, error, warn};
 
 use crate::util::network::http::HandleConfiguration;
+#[cfg(not(target_os = "wasi"))]
 use crate::util::network::http::HttpTimeout;
 
 type Response = http::Response<Vec<u8>>;
@@ -75,42 +88,50 @@ struct Message {
     sender: oneshot::Sender<HttpResult<Response>>,
 }
 
-#[cfg(target_os = "wasi")]
-struct Message {
-    request: Request,
-    sender: oneshot::Sender<HttpResult<Response>>,
-}
-
 #[derive(Default)]
 struct Stats {
     dl_remaining: AtomicI64,
+    #[cfg(not(target_os = "wasi"))]
     dl_transferred: AtomicU64,
 }
 
-/// HTTP Client. Creating a new client spawns a worker
-/// thread that is used for all HTTP requests by this client.
+/// HTTP Client. On non-WASI targets, requests run on a worker thread owned by
+/// the client.
 pub struct Client {
+    #[cfg(not(target_os = "wasi"))]
     channel: Option<Sender<Message>>,
+    #[cfg(not(target_os = "wasi"))]
     thread_handle: Option<JoinHandle<()>>,
+    #[cfg(not(target_os = "wasi"))]
     handle_config: HandleConfiguration,
     stats: Arc<Stats>,
 }
 
 impl Client {
-    /// Spawns a new worker thread where HTTP request execute.
+    /// Creates a client, spawning a worker thread on non-WASI targets.
     pub fn new(handle_config: HandleConfiguration) -> Client {
-        let (tx, rx) = mpsc::channel();
-        let stats = Arc::new(Stats::default());
-        let timeout = handle_config.timeout.clone();
-        let worker_stats = stats.clone();
-        let handle = std::thread::spawn(move || {
-            WorkerServer::run(rx, handle_config.multiplexing, timeout, worker_stats)
-        });
-        Client {
-            channel: Some(tx),
-            thread_handle: Some(handle),
-            handle_config,
-            stats,
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let (tx, rx) = mpsc::channel();
+            let stats = Arc::new(Stats::default());
+            let timeout = handle_config.timeout.clone();
+            let worker_stats = stats.clone();
+            let handle = std::thread::spawn(move || {
+                WorkerServer::run(rx, handle_config.multiplexing, timeout, worker_stats)
+            });
+            Client {
+                channel: Some(tx),
+                thread_handle: Some(handle),
+                handle_config,
+                stats,
+            }
+        }
+        #[cfg(target_os = "wasi")]
+        {
+            let _ = handle_config;
+            Client {
+                stats: Arc::new(Stats::default()),
+            }
         }
     }
 
@@ -129,12 +150,7 @@ impl Client {
             use crate::util::network::wasi_http::fetch_wasi;
             let method = request.method().to_string();
             let url = request.uri().to_string();
-            let mut headers = Vec::new();
-            for (name, value) in request.headers() {
-                if let Ok(value) = value.to_str() {
-                    headers.push((name.to_string(), value.to_string()));
-                }
-            }
+            let headers = collect_wasi_headers(request.headers())?;
             let body = if request.body().is_empty() {
                 None
             } else {
@@ -158,20 +174,20 @@ impl Client {
     /// Perform an HTTP request using this client.
     pub async fn request(&self, request: Request) -> HttpResult<Response> {
         #[cfg(not(target_os = "wasi"))]
-        let handle = self.request_helper(request)?;
+        {
+            let handle = self.request_helper(request)?;
+            let (sender, receiver) = oneshot::channel();
+            let req = Message {
+                easy: handle,
+                sender,
+            };
+            self.channel.as_ref().unwrap().send(req).unwrap();
+            receiver.await.unwrap()
+        }
         #[cfg(target_os = "wasi")]
-        let handle = request;
-
-        let (sender, receiver) = oneshot::channel();
-        let req = Message {
-            #[cfg(not(target_os = "wasi"))]
-            easy: handle,
-            #[cfg(target_os = "wasi")]
-            request: handle,
-            sender,
-        };
-        self.channel.as_ref().unwrap().send(req).unwrap();
-        receiver.await.unwrap()
+        {
+            self.request_blocking(request)
+        }
     }
 
     #[cfg(not(target_os = "wasi"))]
@@ -235,12 +251,12 @@ impl Client {
     }
 }
 
+#[cfg(not(target_os = "wasi"))]
 impl Drop for Client {
     fn drop(&mut self) {
         // Close the channel
         drop(self.channel.take().unwrap());
         // Join the thread
-        #[cfg(not(target_os = "wasi"))]
         let _ = self.thread_handle.take().unwrap().join();
     }
 }
@@ -252,13 +268,12 @@ impl std::fmt::Debug for Client {
 }
 
 /// Manages HTTP requests.
+#[cfg(not(target_os = "wasi"))]
 struct WorkerServer {
     /// Channel to receive new work
     incoming_work: Receiver<Message>,
-    #[cfg(not(target_os = "wasi"))]
     /// curl multi interface
     multi: Multi,
-    #[cfg(not(target_os = "wasi"))]
     /// Map of token to curl handle and response channel
     handles: HashMap<
         usize,
@@ -267,21 +282,19 @@ struct WorkerServer {
             oneshot::Sender<HttpResult<Response>>,
         ),
     >,
-    #[cfg(not(target_os = "wasi"))]
     /// Next token to use
     token: usize,
     /// Global timeout configuration
     timeout: HttpTimeout,
     /// Global transfer statistics
     stats: Arc<Stats>,
-    #[cfg(not(target_os = "wasi"))]
     /// Instant when the current low speed window started
     low_speed_window_start: Instant,
-    #[cfg(not(target_os = "wasi"))]
     /// Amount of total bytes transferred when the current low speed window started
     low_speed_window_initial: u64,
 }
 
+#[cfg(not(target_os = "wasi"))]
 impl WorkerServer {
     pub fn run(
         incoming_work: Receiver<Message>,
@@ -289,64 +302,27 @@ impl WorkerServer {
         timeout: HttpTimeout,
         stats: Arc<Stats>,
     ) {
-        #[cfg(not(target_os = "wasi"))]
-        {
-            let mut multi = Multi::new();
-            if let Err(e) = multi.set_max_host_connections(2) {
-                error!("failed to set max host connections in curl: {e}");
-            }
-            if let Err(e) = multi.pipelining(false, multiplex) {
-                error!("failed to enable multiplexing/pipelining in curl: {e}");
-            }
-
-            let mut worker = Self {
-                incoming_work,
-                multi,
-                handles: HashMap::new(),
-                token: 0,
-                timeout,
-                stats,
-                low_speed_window_start: Instant::now(),
-                low_speed_window_initial: 0,
-            };
-            worker.worker_loop();
+        let mut multi = Multi::new();
+        if let Err(e) = multi.set_max_host_connections(2) {
+            error!("failed to set max host connections in curl: {e}");
         }
-        #[cfg(target_os = "wasi")]
-        {
-            use crate::util::network::wasi_http::fetch_wasi;
-            let _ = multiplex;
-            while let Ok(msg) = incoming_work.recv() {
-                let method = msg.request.method().to_string();
-                let url = msg.request.uri().to_string();
-                let mut headers = Vec::new();
-                for (name, value) in msg.request.headers() {
-                    if let Ok(value) = value.to_str() {
-                        headers.push((name.to_string(), value.to_string()));
-                    }
-                }
-                let body = if msg.request.body().is_empty() {
-                    None
-                } else {
-                    Some(msg.request.body().clone())
-                };
-
-                let res = fetch_wasi(&method, &url, headers, body);
-                let response = match res {
-                    Ok((status, headers, body)) => {
-                        let mut builder = http::Response::builder().status(status);
-                        for (name, value) in headers {
-                            builder = builder.header(name, value);
-                        }
-                        builder.body(body).map_err(|e| Error::Wasi(e.to_string()))
-                    }
-                    Err(e) => Err(Error::Wasi(e)),
-                };
-                let _ = msg.sender.send(response);
-            }
+        if let Err(e) = multi.pipelining(false, multiplex) {
+            error!("failed to enable multiplexing/pipelining in curl: {e}");
         }
+
+        let mut worker = Self {
+            incoming_work,
+            multi,
+            handles: HashMap::new(),
+            token: 0,
+            timeout,
+            stats,
+            low_speed_window_start: Instant::now(),
+            low_speed_window_initial: 0,
+        };
+        worker.worker_loop();
     }
 
-    #[cfg(not(target_os = "wasi"))]
     fn fail_and_drain(&mut self, e: &Error) {
         warn!(
             target: "network",
@@ -357,7 +333,6 @@ impl WorkerServer {
         }
     }
 
-    #[cfg(not(target_os = "wasi"))]
     fn process_response(mut easy: Easy2<Collector>) -> Response {
         let mut response =
             std::mem::replace(&mut easy.get_mut().response, Response::new(Vec::new()));
@@ -375,13 +350,11 @@ impl WorkerServer {
         response
     }
 
-    #[cfg(not(target_os = "wasi"))]
     fn reset_low_speed_timeout(&mut self) {
         self.low_speed_window_start = Instant::now();
         self.low_speed_window_initial = self.stats.dl_transferred.load(Ordering::Acquire);
     }
 
-    #[cfg(not(target_os = "wasi"))]
     fn check_low_speed_timeout(&mut self) -> Option<Error> {
         if Instant::now().duration_since(self.low_speed_window_start) < self.timeout.dur {
             return None;
@@ -401,7 +374,6 @@ impl WorkerServer {
         }
     }
 
-    #[cfg(not(target_os = "wasi"))]
     fn worker_loop(&mut self) {
         const INITIAL_DELAY: Duration = Duration::from_millis(1);
         let mut wait_backoff = INITIAL_DELAY;
@@ -470,7 +442,6 @@ impl WorkerServer {
         }
     }
 
-    #[cfg(not(target_os = "wasi"))]
     fn enqueue_request(&mut self, message: Message) {
         match self.multi.add2(message.easy) {
             Ok(mut handle) => {
@@ -599,6 +570,75 @@ impl ResponsePartsExtensions for Response {
         self.extensions()
             .get::<Extensions>()
             .and_then(|extensions| extensions.effective_url.as_deref())
+    }
+}
+
+#[cfg(any(target_os = "wasi", test))]
+fn collect_wasi_headers(headers: &http::HeaderMap) -> HttpResult<Vec<(String, String)>> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let value = value.to_str().map_err(|_| Error::BadHeader {
+                name: name.to_string(),
+                bytes: value.as_bytes().to_owned(),
+            })?;
+            Ok((name.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+#[cfg(any(target_os = "wasi", test))]
+#[cfg_attr(target_os = "wasi", allow(dead_code))]
+fn target_uses_http_worker() -> bool {
+    cfg!(not(target_os = "wasi"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, collect_wasi_headers, target_uses_http_worker};
+
+    #[test]
+    fn wasi_headers_reject_non_utf8_values() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::HeaderName::from_static("x-invalid"),
+            http::HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+
+        match collect_wasi_headers(&headers) {
+            Err(Error::BadHeader { name, bytes }) => {
+                assert_eq!(name, "x-invalid");
+                assert_eq!(bytes, b"\xff");
+            }
+            result => panic!("expected BadHeader, got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn current_target_selects_expected_http_worker_mode() {
+        #[cfg(target_os = "wasi")]
+        assert!(!target_uses_http_worker());
+        #[cfg(not(target_os = "wasi"))]
+        assert!(target_uses_http_worker());
+    }
+
+    #[test]
+    fn wasi_request_dispatches_directly() {
+        let source = include_str!("http_async.rs").replace("\r\n", "\n");
+        let request = source
+            .split_once("pub async fn request")
+            .unwrap()
+            .1
+            .split_once("fn request_helper")
+            .unwrap()
+            .0;
+        let wasi = request
+            .split_once("#[cfg(target_os = \"wasi\")]")
+            .unwrap()
+            .1;
+
+        assert!(wasi.contains("self.request_blocking(request)"));
+        assert!(!wasi.contains("self.channel"));
     }
 }
 

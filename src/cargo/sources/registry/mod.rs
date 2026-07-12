@@ -1037,6 +1037,13 @@ fn unpack(
         // Unpacking failed
         bytes_written += entry.size();
         let mut result = entry.unpack_in(parent).map_err(anyhow::Error::from);
+        #[cfg(target_os = "wasi")]
+        if result
+            .as_ref()
+            .is_err_and(|error| is_unsupported_wasi_permission_error(error))
+        {
+            result = Ok(true);
+        }
         if cfg!(windows) && restricted_names::is_windows_reserved_path(&entry_path) {
             result = result.with_context(|| {
                 format!(
@@ -1050,6 +1057,45 @@ fn unpack(
     }
 
     Ok(bytes_written)
+}
+
+fn is_unsupported_wasi_permission_error(error: &anyhow::Error) -> bool {
+    let mut permission_context = false;
+    let mut unsupported = false;
+    for cause in error.chain() {
+        permission_context |= cause
+            .to_string()
+            .starts_with("failed to set permissions to ");
+        unsupported |= cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            error.kind() == std::io::ErrorKind::Other && error.to_string() == "Not implemented"
+        });
+    }
+    permission_context && unsupported
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_unsupported_wasi_permission_error;
+    use anyhow::Context as _;
+    use std::io;
+
+    #[test]
+    fn identifies_only_wasi_tar_permission_errors() {
+        let error = anyhow::Error::new(io::Error::other("Not implemented"))
+            .context("failed to set permissions to 644 for `crate/src/lib.rs`");
+        assert!(is_unsupported_wasi_permission_error(&error));
+
+        let permission_denied = anyhow::Error::new(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "permission denied",
+        ))
+        .context("failed to set permissions to 644 for `crate/src/lib.rs`");
+        assert!(!is_unsupported_wasi_permission_error(&permission_denied));
+
+        let unrelated = anyhow::Error::new(io::Error::other("Not implemented"))
+            .context("failed to unpack entry data");
+        assert!(!is_unsupported_wasi_permission_error(&unrelated));
+    }
 }
 
 /// Workaround for rust-lang/cargo#16237

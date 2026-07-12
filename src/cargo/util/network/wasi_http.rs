@@ -234,18 +234,34 @@ pub fn wasi_git_ls_remote(_url: &str) -> Result<Vec<(String, String)>, String> {
     Ok(Vec::new())
 }
 
+#[cfg(any(target_os = "wasi", test))]
+fn allocate_owned_bytes(size: usize) -> *mut u8 {
+    Box::into_raw(vec![0; size].into_boxed_slice()) as *mut u8
+}
+
 #[cfg(target_os = "wasi")]
 #[unsafe(no_mangle)]
 pub extern "C" fn wasi_ext_allocate(size: usize) -> *mut u8 {
-    let mut buf = Vec::with_capacity(size);
-    let ptr = buf.as_mut_ptr();
-    std::mem::forget(buf);
-    ptr
+    allocate_owned_bytes(size)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::empty_stdin;
+    use super::{allocate_owned_bytes, empty_stdin};
+
+    #[test]
+    fn allocated_bytes_can_be_written_reconstructed_and_dropped() {
+        for (expected, size) in [(Vec::new(), 0), (vec![11, 22, 33, 44], 4)] {
+            let ptr = allocate_owned_bytes(size);
+            assert!(!ptr.is_null());
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(expected.as_ptr(), ptr, size);
+                let actual = Vec::from_raw_parts(ptr, size, size);
+                assert_eq!(actual, expected);
+            }
+        }
+    }
 
     #[test]
     fn wasi_spawn_empty_stdin_has_valid_pointer() {
