@@ -9,6 +9,7 @@ use std::io;
 use std::io::prelude::*;
 use std::iter;
 use std::path::{Component, Path, PathBuf};
+#[cfg(not(target_os = "wasi"))]
 use tempfile::Builder as TempFileBuilder;
 
 /// Joins paths into a string suitable for the `PATH` environment variable.
@@ -219,7 +220,6 @@ pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()>
 /// If the path is a symlink, it will follow the symlink and write to the actual target.
 pub fn write_atomic<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Result<()> {
     let path = path.as_ref();
-
     // Check if the path is a symlink and follow it if it is
     let resolved_path;
     let path = if path.is_symlink() {
@@ -230,35 +230,89 @@ pub fn write_atomic<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> Res
         path
     };
 
-    // On unix platforms, get the permissions of the original file. Copy only the user/group/other
-    // read/write/execute permission bits. The tempfile lib defaults to an initial mode of 0o600,
-    // and we'll set the proper permissions after creating the file.
-    #[cfg(unix)]
-    let perms = path.metadata().ok().map(|meta| {
-        use std::os::unix::fs::PermissionsExt;
-
-        // these constants are u16 on macOS
-        let mask = u32::from(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO);
-        let mode = meta.permissions().mode() & mask;
-
-        std::fs::Permissions::from_mode(mode)
-    });
-
-    let mut tmp = TempFileBuilder::new()
-        .prefix(path.file_name().unwrap())
-        .tempfile_in(path.parent().unwrap())?;
-    tmp.write_all(contents.as_ref())?;
-
-    // On unix platforms, set the permissions on the newly created file. We can use fchmod (called
-    // by the std lib; subject to change) which ignores the umask so that the new file has the same
-    // permissions as the old file.
-    #[cfg(unix)]
-    if let Some(perms) = perms {
-        tmp.as_file().set_permissions(perms)?;
+    #[cfg(target_os = "wasi")]
+    {
+        return write_atomic_wasi(path, contents.as_ref());
     }
 
-    tmp.persist(path)?;
-    Ok(())
+    #[cfg(not(target_os = "wasi"))]
+    {
+        // On unix platforms, get the permissions of the original file. Copy only the user/group/other
+        // read/write/execute permission bits. The tempfile lib defaults to an initial mode of 0o600,
+        // and we'll set the proper permissions after creating the file.
+        #[cfg(unix)]
+        let perms = path.metadata().ok().map(|meta| {
+            use std::os::unix::fs::PermissionsExt;
+
+            // these constants are u16 on macOS
+            let mask = u32::from(libc::S_IRWXU | libc::S_IRWXG | libc::S_IRWXO);
+            let mode = meta.permissions().mode() & mask;
+
+            std::fs::Permissions::from_mode(mode)
+        });
+
+        let mut tmp = TempFileBuilder::new()
+            .prefix(path.file_name().unwrap())
+            .tempfile_in(path.parent().unwrap())?;
+        tmp.write_all(contents.as_ref())?;
+
+        // On unix platforms, set the permissions on the newly created file. We can use fchmod (called
+        // by the std lib; subject to change) which ignores the umask so that the new file has the same
+        // permissions as the old file.
+        #[cfg(unix)]
+        if let Some(perms) = perms {
+            tmp.as_file().set_permissions(perms)?;
+        }
+
+        tmp.persist(path)?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "wasi")]
+fn write_atomic_wasi(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
+    const MAX_CREATE_ATTEMPTS: usize = 16;
+
+    let parent = path.parent().unwrap();
+    let file_name = path.file_name().unwrap();
+    for _ in 0..MAX_CREATE_ATTEMPTS {
+        let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let mut temp_name = OsString::from(".");
+        temp_name.push(file_name);
+        temp_name.push(format!(".cargo-write-{id}.tmp"));
+        let temp_path = parent.join(temp_name);
+
+        let mut temp = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(temp) => temp,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to create `{}`", temp_path.display()));
+            }
+        };
+
+        let write_result = temp.write_all(contents);
+        drop(temp);
+        let result = write_result
+            .and_then(|()| fs::rename(&temp_path, path))
+            .with_context(|| format!("failed to write `{}`", path.display()));
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        return result;
+    }
+
+    anyhow::bail!(
+        "failed to create a temporary file for `{}` after {MAX_CREATE_ATTEMPTS} attempts",
+        path.display()
+    )
 }
 
 /// Equivalent to [`write()`], but does not write anything if the file contents
